@@ -22,6 +22,7 @@ let fontBold = false;
 let drawing = false;
 let last = null;
 let selection = null; // {x,y,w,h}
+let cropPending = false;
 // editing state for text tool
 let currentTextEditor = null; // {ta, layer, pending:{color,fontSize,fontFamily,bold}, commit, cancel}
 // Transform state for interactive transform tool
@@ -34,12 +35,13 @@ function pushHistory(){
   // capture state
   const snapshot = {layers: [], activeIndex: layers.indexOf(activeLayer)};
   for(const l of layers){
-    snapshot.layers.push({dataURL: l.canvas.toDataURL(), offset: {...l.offset}, visible: l.visible, opacity: l.opacity, name: l.name});
+    snapshot.layers.push({dataURL: l.canvas.toDataURL(), offset: {...l.offset}, visible: l.visible, opacity: l.opacity, name: l.name, blend: l.blend || 'source-over', mask: l.maskCanvas ? l.maskCanvas.toDataURL() : null});
   }
   // trim redo
   history = history.slice(0, historyIndex+1);
   history.push(snapshot);
   historyIndex = history.length-1;
+  updateHistoryButtons();
 }
 
 async function restoreHistory(idx){
@@ -52,29 +54,60 @@ async function restoreHistory(idx){
     await new Promise(r=> img.onload = r);
     const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
     const ctx = c.getContext('2d'); ctx.drawImage(img,0,0);
-    newLayers.push({canvas:c, ctx, name:item.name, offset:item.offset, visible:item.visible, opacity:item.opacity});
+    const layerObj = {canvas:c, ctx, name:item.name, offset:item.offset, visible:item.visible, opacity:item.opacity, blend: item.blend || 'source-over', maskCanvas: null};
+    if(item.mask){
+      const mimg = new Image(); mimg.src = item.mask; await new Promise(r=> mimg.onload = r);
+      const mc = document.createElement('canvas'); mc.width = mimg.width; mc.height = mimg.height; const mctx = mc.getContext('2d'); mctx.drawImage(mimg,0,0);
+      layerObj.maskCanvas = mc;
+    }
+    newLayers.push(layerObj);
   }
   layers = newLayers;
   activeLayer = layers[snap.activeIndex] || null;
   renderLayersUI(); composite();
   historyIndex = idx;
+  updateHistoryButtons();
 }
 
+function updateHistoryButtons(){
+  try{
+    const undoBtn = document.getElementById('undo');
+    const redoBtn = document.getElementById('redo');
+    if(undoBtn) undoBtn.disabled = historyIndex <= 0;
+    if(redoBtn) redoBtn.disabled = historyIndex >= history.length-1 || history.length===0;
+  }catch(e){}
+}
+
+function undo(){ if(historyIndex > 0) restoreHistory(historyIndex-1); }
+function redo(){ if(historyIndex < history.length-1) restoreHistory(historyIndex+1); }
+
 function createLayer(name='Layer'){
+  // ensure new layer canvas matches the largest existing layer or the current view
+  let desiredW = width, desiredH = height;
+  for(const l of layers){ if(l && l.canvas){ desiredW = Math.max(desiredW, l.canvas.width); desiredH = Math.max(desiredH, l.canvas.height); } }
+  // if desired size differs from current view, update view size so canvases align
+  if(desiredW !== width || desiredH !== height){
+    width = desiredW; height = desiredH;
+    view.width = width; view.height = height; view.style.width = width + 'px'; view.style.height = height + 'px';
+  }
   const c = document.createElement('canvas');
-  c.width = width; c.height = height;
+  c.width = desiredW; c.height = desiredH;
   const ctx = c.getContext('2d');
   // If this is a Background layer, fill it white by default
   if(name && String(name).toLowerCase().includes('background')){
     ctx.save(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,c.width,c.height); ctx.restore();
   }
-  const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1};
+  const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null};
   layers.push(layer);
   pushHistory();
   setActiveLayer(layers.length-1);
   renderLayersUI();
   composite();
 }
+
+// ensure there's an initial history snapshot representing the empty document
+pushHistory();
+updateHistoryButtons();
 
 function setActiveLayer(idx){
   activeLayer = layers[idx];
@@ -106,6 +139,9 @@ function renderLayersUI(){
     const opVal = document.createElement('div'); opVal.className = 'layer-opacity-value'; opVal.textContent = Math.round(layer.opacity*100) + '%';
     opacity.oninput = (e)=>{ layer.opacity = Number(e.target.value); opVal.textContent = Math.round(layer.opacity*100) + '%'; composite(); };
     opacity.onchange = ()=> pushHistory();
+    // prevent clicks on controls from bubbling and re-rendering the layer row (which closes selects)
+    opacity.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
+    opacity.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
 
     const controls = document.createElement('div'); controls.className='layer-controls';
     const sel = document.createElement('button'); sel.textContent = (layer===activeLayer)? '●' : '○'; sel.className='small';
@@ -126,15 +162,32 @@ function renderLayersUI(){
     name.style.whiteSpace = 'nowrap'; name.style.overflow = 'hidden'; name.style.textOverflow = 'ellipsis'; name.style.width = '100%';
     meta.appendChild(name);
 
-    const midRow = document.createElement('div'); midRow.style.display = 'flex'; midRow.style.alignItems = 'center'; midRow.style.gap = '8px';
+    const midRow = document.createElement('div'); midRow.className = 'layer-mid-row';
     midRow.appendChild(thumb);
-    const controlWrap = document.createElement('div'); controlWrap.style.display = 'flex'; controlWrap.style.flexDirection = 'column'; controlWrap.style.flex = '1';
-    const opRow = document.createElement('div'); opRow.style.display = 'flex'; opRow.style.alignItems = 'center'; opRow.style.justifyContent = 'space-between';
+    const controlWrap = document.createElement('div'); controlWrap.className = 'layer-control-wrap';
+    const opRow = document.createElement('div'); opRow.className = 'layer-op-row';
     opRow.appendChild(opacity);
     opRow.appendChild(opVal);
     controlWrap.appendChild(opRow);
+    // blend mode selector
+    const blendRow = document.createElement('div'); blendRow.className = 'layer-blend-row';
+    const blendLabel = document.createElement('div'); blendLabel.className='prop-title'; blendLabel.textContent='Blend';
+    const blendSel = document.createElement('select'); ['source-over','multiply','screen','overlay','darken','lighten'].forEach(b=>{ const o=document.createElement('option'); o.value=b; o.textContent=b; if((layer.blend||'source-over')===b) o.selected=true; blendSel.appendChild(o); });
+    blendSel.onchange = (e)=>{ layer.blend = e.target.value; composite(); pushHistory(); };
+    // prevent the select from bubbling (keeps the dropdown open while interacting)
+    blendSel.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
+    blendSel.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
+    blendSel.addEventListener('click', (ev)=>{ ev.stopPropagation(); });
+    blendRow.appendChild(blendLabel); blendRow.appendChild(blendSel); controlWrap.appendChild(blendRow);
     midRow.appendChild(controlWrap);
     meta.appendChild(midRow);
+
+    // mask control placed under the controlWrap to avoid overflowing the right column
+    const maskRow = document.createElement('div'); maskRow.className = 'layer-mask-row';
+    const maskBtn = document.createElement('button'); maskBtn.className='small mask-btn'; maskBtn.textContent = layer.maskCanvas? 'Remove Mask' : 'Add Mask';
+    maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; } renderLayersUI(); composite(); pushHistory(); };
+    maskRow.appendChild(maskBtn);
+    meta.appendChild(maskRow);
 
     row.appendChild(meta);
     row.appendChild(controls);
@@ -185,16 +238,75 @@ function moveLayerDown(indexFromTop){
 }
 
 function composite(){
+  // Composite layers with Photoshop-like blend modes by per-pixel blending when needed.
   viewCtx.clearRect(0,0,width,height);
-  // If in transform mode, we'll draw all layers except active transformed layer, then render transformed preview
+  const tmp = document.createElement('canvas'); tmp.width = width; tmp.height = height;
+  // contexts used for readback should set willReadFrequently to true
+  const tctx = tmp.getContext('2d', { willReadFrequently: true });
+  const accCanvas = document.createElement('canvas'); accCanvas.width = width; accCanvas.height = height;
+  const accCtx = accCanvas.getContext('2d', { willReadFrequently: true });
+
+  // helper: perform per-pixel blend of src (ImageData) onto accCtx at region x,y
+  function blendRectToAcc(x,y,w,h, srcImg, layer){
+    // read destination region
+    const dstImg = accCtx.getImageData(x,y,w,h);
+    const s = srcImg.data; const d = dstImg.data;
+    const blendName = layer.blend || 'source-over';
+    const funcs = {
+      'multiply': (s,d)=> s*d,
+      'screen': (s,d)=> 1 - (1-s)*(1-d),
+      'overlay': (s,d)=> (d < 0.5) ? (2*s*d) : (1 - 2*(1-s)*(1-d)),
+      'darken': (s,d)=> Math.min(s,d),
+      'lighten': (s,d)=> Math.max(s,d)
+    };
+    const blendFn = funcs[blendName];
+    for(let iy=0; iy<h; iy++){
+      for(let ix=0; ix<w; ix++){
+        const i = (iy * w + ix) * 4;
+        const sR = s[i]/255, sG = s[i+1]/255, sB = s[i+2]/255, sAraw = s[i+3]/255;
+        const sA = sAraw * (layer.opacity === undefined ? 1 : layer.opacity);
+        if(sA === 0) continue;
+        const dR = d[i]/255, dG = d[i+1]/255, dB = d[i+2]/255, dA = d[i+3]/255;
+        let bR, bG, bB;
+        if(!blendFn) { bR = sR; bG = sG; bB = sB; } else { bR = blendFn(sR,dR); bG = blendFn(sG,dG); bB = blendFn(sB,dB); }
+        const outA = sA + dA*(1 - sA);
+        const premR = bR * sA + dR * dA * (1 - sA);
+        const premG = bG * sA + dG * dA * (1 - sA);
+        const premB = bB * sA + dB * dA * (1 - sA);
+        const outR = outA ? (premR / outA) : 0;
+        const outG = outA ? (premG / outA) : 0;
+        const outB = outA ? (premB / outA) : 0;
+        d[i] = Math.round(outR*255); d[i+1] = Math.round(outG*255); d[i+2] = Math.round(outB*255); d[i+3] = Math.round(outA*255);
+      }
+    }
+    accCtx.putImageData(dstImg, x, y);
+  }
+
   for(const layer of layers){
     if(!layer.visible) continue;
-    // skip preview layer while transforming
     if(transformState && layer === transformState.layer) continue;
-    viewCtx.globalAlpha = layer.opacity;
-    viewCtx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
+    // fast path: simple source-over with no mask -> draw directly to accCtx
+    if((!layer.blend || layer.blend === 'source-over') && !layer.maskCanvas){
+      accCtx.globalCompositeOperation = 'source-over';
+      accCtx.globalAlpha = layer.opacity === undefined ? 1 : layer.opacity;
+      accCtx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
+      accCtx.globalAlpha = 1;
+      continue;
+    }
+    // otherwise we need to render the layer into tmp (including mask) and blend per-pixel
+    tctx.clearRect(0,0,width,height);
+    tctx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
+    if(layer.maskCanvas){ tctx.globalCompositeOperation = 'destination-in'; tctx.drawImage(layer.maskCanvas, 0,0); tctx.globalCompositeOperation = 'source-over'; }
+    // determine bounding rect for this layer in canvas coordinates
+    const lx0 = Math.max(0, layer.offset.x|0); const ly0 = Math.max(0, layer.offset.y|0);
+    const lx1 = Math.min(width, layer.offset.x + layer.canvas.width|0); const ly1 = Math.min(height, layer.offset.y + layer.canvas.height|0);
+    const rw = Math.max(0, lx1 - lx0); const rh = Math.max(0, ly1 - ly0);
+    if(rw === 0 || rh === 0) continue;
+    const srcImg = tctx.getImageData(lx0, ly0, rw, rh);
+    blendRectToAcc(lx0, ly0, rw, rh, srcImg, layer);
   }
-  viewCtx.globalAlpha = 1;
+  // draw accumulator to view
+  viewCtx.drawImage(accCanvas, 0,0);
   // draw transform preview if active
   if(transformState){
     const ts = transformState;
@@ -250,8 +362,8 @@ function getPos(e){
 }
 
 view.addEventListener('mousedown', (e)=>{
-  // allow Text tool to create a new layer even if nothing is selected
-  if(!activeLayer && tool !== 'text') return;
+  // allow some tools even when there's no active layer (text, crop)
+  if(!activeLayer && !['text','crop'].includes(tool)) return;
   // transform interactive start
   if(tool === 'transform'){
     if(!transformState) startTransform(activeLayer);
@@ -296,10 +408,43 @@ view.addEventListener('mousedown', (e)=>{
 
   if(tool==='select'){
     // start selection rect
-    selection = {start:getPos(e), x:0,y:0,w:0,h:0};
+    const vpRect = viewport.getBoundingClientRect();
+    const startVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
+    selection = { startCanvas: getPos(e), startVP, x:0, y:0, w:0, h:0 };
     const selDiv = document.createElement('div'); selDiv.className='selection-rect'; selDiv.id = 'sel-rect';
+    // position initial zero-size rect at start point
+    selDiv.style.left = startVP.x + 'px'; selDiv.style.top = startVP.y + 'px'; selDiv.style.width = '0px'; selDiv.style.height = '0px';
     viewport.appendChild(selDiv);
     drawing = true; return;
+  }
+
+  if(tool === 'crop'){
+    // start crop rect (re-uses selection overlay)
+    const vpRect = viewport.getBoundingClientRect();
+    const startVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
+    selection = { startCanvas: getPos(e), startVP, x:0, y:0, w:0, h:0 };
+    const selDiv = document.createElement('div'); selDiv.className='selection-rect'; selDiv.id = 'sel-rect';
+    selDiv.style.left = startVP.x + 'px'; selDiv.style.top = startVP.y + 'px'; selDiv.style.width = '0px'; selDiv.style.height = '0px';
+    viewport.appendChild(selDiv);
+    drawing = true; return;
+  }
+
+  if(tool === 'magic'){
+    const pos = getPos(e);
+    if(!activeLayer) { alert('Select a layer to apply Magic Wand mask'); return; }
+    // build composite imageData
+    const tmpc = document.createElement('canvas'); tmpc.width = width; tmpc.height = height; const tctx2 = tmpc.getContext('2d');
+    for(const layer of layers){ if(!layer.visible) continue; tctx2.globalAlpha = layer.opacity; tctx2.drawImage(layer.canvas, layer.offset.x, layer.offset.y); }
+    tctx2.globalAlpha = 1;
+    const compImg = tctx2.getImageData(0,0,width,height);
+    const mask = floodFillMask(compImg, Math.round(pos.x), Math.round(pos.y));
+    // create mask canvas
+    const mc = document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); const md = mctx.createImageData(width, height);
+    for(let i=0;i<mask.length;i++){ const a = mask[i]?255:0; const idx = i*4; md.data[idx]=255; md.data[idx+1]=255; md.data[idx+2]=255; md.data[idx+3]=a; }
+    mctx.putImageData(md,0,0);
+    activeLayer.maskCanvas = mc;
+    pushHistory(); renderLayersUI(); composite();
+    return;
   }
 
   if(tool === 'text'){
@@ -338,9 +483,7 @@ view.addEventListener('mousedown', (e)=>{
             renderLayersUI(); composite(); pushHistory();
           }
           function cancelEdit(){ try{ if(ta.parentNode) ta.parentNode.removeChild(ta);}catch(e){} currentTextEditor = null; }
-          ta.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); commitEdit(); } if(ev.key === 'Escape'){ ev.preventDefault(); cancelEdit(); } });
-          // allow Enter for newlines; require Ctrl/Cmd+Enter to commit
-          ta.removeEventListener && ta.removeEventListener('keydown', ()=>{});
+          // require Ctrl/Cmd+Enter to commit; Enter inserts newline
           ta.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter' && (ev.ctrlKey || ev.metaKey)){ ev.preventDefault(); commitEdit(); } if(ev.key === 'Escape'){ ev.preventDefault(); cancelEdit(); } });
           currentTextEditor = { ta, layer: lay, pending, commit: commitEdit, cancel: cancelEdit };
           return;
@@ -389,6 +532,7 @@ view.addEventListener('mousedown', (e)=>{
     currentTextEditor = { ta, layer: null, pending, commit: commitText, cancel: cancelText };
     return;
   }
+  
 
   if(tool === 'fill'){
     const pos = getPos(e);
@@ -442,29 +586,34 @@ view.addEventListener('mousemove', (e)=>{
       const dx = pos.x - last.x; const dy = pos.y - last.y; l.offset.x += dx; l.offset.y += dy; last = pos; composite(); return;
     }
   }
-  if(!drawing || !activeLayer) return;
+  if(!drawing) return;
+  // allow selection/crop to update even when no active layer exists
+  if(tool === 'select' || tool === 'crop'){
+    if(!selection) return;
+    // update CSS overlay using viewport-space coordinates (client pixels)
+    const vpRect = viewport.getBoundingClientRect();
+    const curVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
+    const left = Math.min(selection.startVP.x, curVP.x);
+    const top = Math.min(selection.startVP.y, curVP.y);
+    const wcss = Math.abs(curVP.x - selection.startVP.x);
+    const hcss = Math.abs(curVP.y - selection.startVP.y);
+    const selDiv = document.getElementById('sel-rect');
+    if(selDiv){ selDiv.style.left = left + 'px'; selDiv.style.top = top + 'px'; selDiv.style.width = wcss + 'px'; selDiv.style.height = hcss + 'px'; }
+    // also update logical canvas-space selection values for crop/selection logic
+    const s = selection.startCanvas || selection.start;
+    selection.x = Math.min(s.x, pos.x);
+    selection.y = Math.min(s.y, pos.y);
+    selection.w = Math.abs(pos.x - s.x);
+    selection.h = Math.abs(pos.y - s.y);
+    return;
+  }
+  // remaining drawing tools require an active layer
+  if(!activeLayer) return;
   const ctx = activeLayer.ctx;
   if(tool==='move'){
     const dx = pos.x - last.x; const dy = pos.y - last.y;
     activeLayer.offset.x += dx; activeLayer.offset.y += dy;
     last = pos; composite(); return;
-  }
-
-  if(tool==='select'){
-    // update selection rect
-    const s = selection.start;
-    selection.x = Math.min(s.x, pos.x);
-    selection.y = Math.min(s.y, pos.y);
-    selection.w = Math.abs(pos.x - s.x);
-    selection.h = Math.abs(pos.y - s.y);
-    const selDiv = document.getElementById('sel-rect');
-    if(selDiv){
-      selDiv.style.left = (selection.x * (view.getBoundingClientRect().width/view.width)) + 'px';
-      selDiv.style.top = (selection.y * (view.getBoundingClientRect().height/view.height)) + 'px';
-      selDiv.style.width = (selection.w * (view.getBoundingClientRect().width/view.width)) + 'px';
-      selDiv.style.height = (selection.h * (view.getBoundingClientRect().height/view.height)) + 'px';
-    }
-    return;
   }
   ctx.lineTo(pos.x - activeLayer.offset.x, pos.y - activeLayer.offset.y);
   ctx.stroke(); composite();
@@ -479,12 +628,12 @@ window.addEventListener('mouseup', ()=>{
     commitTransform();
     return;
   }
-  if(!drawing || !activeLayer) return;
+  if(!drawing) return;
   drawing = false;
   if(tool==='select'){
     // finalize selection: create new layer with selected pixels
     const selDiv = document.getElementById('sel-rect'); if(selDiv) selDiv.remove();
-    if(selection && selection.w > 1 && selection.h > 1){
+    if(selection && selection.w > 1 && selection.h > 1 && activeLayer){
       const s = selection;
       const sx = Math.round(s.x - activeLayer.offset.x); const sy = Math.round(s.y - activeLayer.offset.y);
       const sw = Math.round(s.w); const sh = Math.round(s.h);
@@ -503,6 +652,21 @@ window.addEventListener('mouseup', ()=>{
     selection = null; return;
   }
 
+  if(tool === 'crop'){
+    // keep the selection visible and require explicit commit/cancel
+    drawing = false;
+    const selDiv = document.getElementById('sel-rect');
+    if(selection && selection.w > 1 && selection.h > 1){
+      cropPending = true;
+      if(selDiv) selDiv.classList.add('pending-crop');
+      renderToolProps();
+    } else {
+      if(selDiv) selDiv.remove();
+      selection = null; cropPending = false; renderToolProps();
+    }
+    return;
+  }
+
   try{ activeLayer.ctx.restore(); }catch(e){}
   pushHistory();
 });
@@ -515,11 +679,17 @@ document.getElementById('tool-select').addEventListener('click', ()=> selectTool
 document.getElementById('tool-transform').addEventListener('click', ()=> doTransform());
 document.getElementById('tool-text')?.addEventListener('click', ()=> selectTool('text'));
 document.getElementById('tool-fill')?.addEventListener('click', ()=> selectTool('fill'));
+document.getElementById('tool-crop')?.addEventListener('click', ()=> selectTool('crop'));
+document.getElementById('tool-magic')?.addEventListener('click', ()=> selectTool('magic'));
 
 function selectTool(t){
   // if leaving the text tool while an editor is open, commit the edit
   if(currentTextEditor && t !== 'text'){
     try{ currentTextEditor.commit(); }catch(err){ currentTextEditor = null; }
+  }
+  // if a crop is pending and user switches tools, cancel it
+  if(cropPending && t !== 'crop'){
+    try{ cancelCrop(); }catch(e){ cropPending = false; }
   }
   tool = t;
   document.querySelectorAll('.tool').forEach(b=>b.classList.remove('active'));
@@ -587,9 +757,17 @@ function renderToolProps(){
     // if editing right now, show commit/cancel buttons
     if(currentTextEditor){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
-      const commitBtn = document.createElement('button'); commitBtn.textContent = 'Commit (Enter)'; commitBtn.onclick = ()=>{ currentTextEditor.commit(); };
+      const commitBtn = document.createElement('button'); commitBtn.textContent = 'Commit (Ctrl+Enter)'; commitBtn.onclick = ()=>{ currentTextEditor.commit(); };
       const cancelBtn = document.createElement('button'); cancelBtn.textContent = 'Cancel (Esc)'; cancelBtn.onclick = ()=>{ currentTextEditor.cancel(); };
       row.appendChild(commitBtn); row.appendChild(cancelBtn); el.appendChild(row);
+    }
+  } else if(tool === 'crop'){
+    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Click and drag to select crop area. Release to preview, then Commit or Cancel.'; el.appendChild(help);
+    if(cropPending){
+      const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
+      const ok = document.createElement('button'); ok.textContent = 'Commit Crop'; ok.onclick = ()=>{ try{ commitCrop(); }catch(e){} };
+      const cancel = document.createElement('button'); cancel.textContent = 'Cancel Crop'; cancel.onclick = ()=>{ try{ cancelCrop(); }catch(e){} };
+      row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
     }
   } else {
     const info = document.createElement('div'); info.style.color='#ddd'; info.style.fontSize='13px'; info.textContent='Tool options'; el.appendChild(info);
@@ -748,6 +926,9 @@ document.getElementById('del-layer').addEventListener('click', ()=> deleteActive
 document.getElementById('export').addEventListener('click', exportPNG);
 document.getElementById('import-image').addEventListener('click', ()=> fileInput.click());
 fileInput.addEventListener('change', handleFile);
+// history buttons
+const undoBtn = document.getElementById('undo'); if(undoBtn) undoBtn.addEventListener('click', ()=> undo());
+const redoBtn = document.getElementById('redo'); if(redoBtn) redoBtn.addEventListener('click', ()=> redo());
 
 function handleFile(e){
   const f = e.target.files[0]; if(!f) return;
@@ -818,6 +999,39 @@ function commitTransform(){
   l.canvas = out; l.ctx = out.getContext('2d');
   transformState = null; window.removeEventListener('keydown', transformKeyHandler);
   pushHistory(); renderLayersUI(); composite();
+}
+
+// Crop commit/cancel helpers
+function commitCrop(){
+  if(!selection) return;
+  const selDiv = document.getElementById('sel-rect'); if(selDiv) selDiv.remove();
+  if(selection && selection.w > 1 && selection.h > 1){
+    const s = selection;
+    const sx = Math.round(s.x); const sy = Math.round(s.y);
+    const sw = Math.max(1, Math.round(s.w)); const sh = Math.max(1, Math.round(s.h));
+    // for each layer, produce a new canvas of size sw x sh and draw content shifted
+    for(const layer of layers){
+      const newC = document.createElement('canvas'); newC.width = sw; newC.height = sh; const nctx = newC.getContext('2d');
+      const srcX = sx - layer.offset.x; const srcY = sy - layer.offset.y;
+      // if source rectangle fully inside layer canvas, copy directly
+      if(srcX >= 0 && srcY >= 0 && srcX + sw <= layer.canvas.width && srcY + sh <= layer.canvas.height){
+        nctx.drawImage(layer.canvas, srcX, srcY, sw, sh, 0,0,sw,sh);
+      } else {
+        // otherwise draw the layer canvas with offset so it aligns inside new canvas
+        nctx.clearRect(0,0,sw,sh);
+        nctx.drawImage(layer.canvas, 0,0, layer.canvas.width, layer.canvas.height, layer.offset.x - sx, layer.offset.y - sy, layer.canvas.width, layer.canvas.height);
+      }
+      layer.canvas = newC; layer.ctx = nctx; layer.offset.x = layer.offset.x - sx; layer.offset.y = layer.offset.y - sy;
+    }
+    width = sw; height = sh; view.width = width; view.height = height; view.style.width = width + 'px'; view.style.height = height + 'px';
+    renderLayersUI(); composite(); pushHistory();
+  }
+  selection = null; cropPending = false; renderToolProps();
+}
+
+function cancelCrop(){
+  const selDiv = document.getElementById('sel-rect'); if(selDiv) selDiv.remove();
+  selection = null; cropPending = false; renderToolProps();
 }
 
 // Init default

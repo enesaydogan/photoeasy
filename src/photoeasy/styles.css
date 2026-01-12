@@ -49,12 +49,15 @@ body,html{height:100%;margin:0;background:linear-gradient(180deg,#0f1720 0%, #0b
 .layer-thumb{width:56px;height:42px;border-radius:6px;margin-right:10px;object-fit:cover;box-shadow:0 2px 8px rgba(2,6,23,0.6)}
 .layer-meta{display:flex;flex-direction:column;gap:8px;flex:1}
 .layer-row{padding:10px;border-radius:8px}
-.layer-row.active{background:linear-gradient(90deg,rgba(10,132,255,0.06),rgba(10,132,255,0.02));box-shadow:inset 0 0 0 1px rgba(10,132,255,0.04)}
+.layer-row.active{background:linear-gradient(180deg,#0a84ff22,#006ee622);color:#fff;box-shadow:0 8px 24px rgba(10,132,255,0.12);border:1px solid rgba(10,132,255,0.12)}
+.layer-row.active .layer-name{color:#ffffff}
+.layer-row.active .layer-thumb{box-shadow:0 8px 24px rgba(10,132,255,0.12)}
 .layer-name{font-size:13px;color:#e6eef8;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;display:block}
 .layer-opacity{width:100px}
 .layer-opacity-value{font-size:12px;color:#9fb0da;margin-left:6px;min-width:36px;text-align:right}
 .layer-controls{display:flex;gap:6px}
-.layer-controls .small{padding:6px 8px;font-size:12px;border-radius:6px}
+# theme for small layer control buttons
+.layer-controls .small{padding:6px 8px;font-size:12px;background:transparent;border:1px solid rgba(255,255,255,0.03);color:#e6eef8;border-radius:6px}
 .layer-controls .small:hover{background:rgba(255,255,255,0.02)}
 #layers-list{list-style:none;padding:0;margin:0}
 #layers-list li{padding:8px;margin-bottom:8px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.03);display:flex;justify-content:space-between;align-items:center}
@@ -66,9 +69,24 @@ body,html{height:100%;margin:0;background:linear-gradient(180deg,#0f1720 0%, #0b
 .layer-controls button{margin-left:4px}
 
 /* Layer control tweaks */
-.layer-row{display:flex;align-items:center;gap:8px}
+.layer-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .layer-opacity{width:90px}
+
+.layer-control-wrap{display:flex;flex-direction:column;flex:1;min-width:0}
+.layer-mid-row{display:flex;align-items:center;gap:8px;width:100%}
+.layer-op-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:1}
+.layer-blend-row{display:flex;align-items:center;gap:8px}
+.layer-blend-row select{ -webkit-appearance:none; appearance:none; padding:6px 30px 6px 8px; border-radius:6px; border:1px solid rgba(255,255,255,0.04); background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01)); color:#e6eef8; font-size:12px; min-width:120px; background-repeat:no-repeat; background-position: right 8px center; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='12' height='12'><path d='M7 10l5 5 5-5' stroke='%23bcd7ff' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>"); }
+.layer-blend-row select:focus{ outline:none; box-shadow:0 6px 18px rgba(10,132,255,0.12); border-color:rgba(10,132,255,0.18); }
+.layer-blend-row select:hover{ border-color:rgba(255,255,255,0.06); }
+.layer-mask-row{display:flex;justify-content:flex-end;margin-top:6px}
+.mask-btn{padding:6px 8px}
 .layer-controls .small{padding:4px 6px;font-size:12px}
+
+/* Blend selector and mask button theme tweaks */
+.layer-controls select{padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));color:#e6eef8;font-size:12px}
+.layer-meta .prop-title{font-size:12px;color:#9fb0da}
+.layer-controls .small[disabled]{opacity:0.5;cursor:not-allowed}
 
 /* Selection overlay */
 .selection-rect{position:absolute;border:1px dashed rgba(100,130,255,0.9);background:rgba(10,132,255,0.06);pointer-events:none;border-radius:4px}
