@@ -925,10 +925,50 @@ document.getElementById('add-layer').addEventListener('click', ()=> createLayer(
 document.getElementById('del-layer').addEventListener('click', ()=> deleteActiveLayer());
 document.getElementById('export').addEventListener('click', exportPNG);
 document.getElementById('import-image').addEventListener('click', ()=> fileInput.click());
+document.getElementById('resize-canvas').addEventListener('click', resizeCanvas);
 fileInput.addEventListener('change', handleFile);
 // history buttons
 const undoBtn = document.getElementById('undo'); if(undoBtn) undoBtn.addEventListener('click', ()=> undo());
 const redoBtn = document.getElementById('redo'); if(redoBtn) redoBtn.addEventListener('click', ()=> redo());
+
+function resizeCanvas(){
+  const newWidth = prompt('Enter new canvas width:', width);
+  const newHeight = prompt('Enter new canvas height:', height);
+  if (newWidth === null || newHeight === null) return;
+  
+  const parsedWidth = parseInt(newWidth);
+  const parsedHeight = parseInt(newHeight);
+  
+  if (isNaN(parsedWidth) || isNaN(parsedHeight) || parsedWidth <= 0 || parsedHeight <= 0) {
+    alert('Please enter valid dimensions.');
+    return;
+  }
+  
+  // Update the canvas dimensions
+  width = parsedWidth;
+  height = parsedHeight;
+  view.width = width;
+  view.height = height;
+  view.style.width = width + 'px';
+  view.style.height = height + 'px';
+  
+  // Resize each layer's canvas
+  for (const layer of layers) {
+    const newCanvas = document.createElement('canvas');
+    newCanvas.width = width;
+    newCanvas.height = height;
+    const newCtx = newCanvas.getContext('2d');
+    
+    // Draw the existing layer content onto the new canvas
+    newCtx.drawImage(layer.canvas, 0, 0);
+    
+    layer.canvas = newCanvas;
+    layer.ctx = newCtx;
+  }
+  
+  composite();
+  pushHistory();
+}
 
 function handleFile(e){
   const f = e.target.files[0]; if(!f) return;
