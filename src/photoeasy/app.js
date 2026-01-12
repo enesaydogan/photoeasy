@@ -6,7 +6,16 @@ const fileInput = document.getElementById('file-input');
 
 let width = 1200, height = 700;
 view.width = width; view.height = height;
-view.style.width = width + 'px'; view.style.height = height + 'px';
+// Ensure the viewport wrapper matches the canvas aspect ratio and let the canvas scale via CSS
+function updateViewportAspect(){
+  const inner = document.getElementById('viewport-inner');
+  if(inner){
+    try{ inner.style.setProperty('aspect-ratio', width + '/' + height); }catch(e){ /* ignore */ }
+  }
+  // let the canvas fill the wrapper (CSS handles scaling)
+  try{ view.style.width = '100%'; view.style.height = '100%'; }catch(e){}
+}
+updateViewportAspect();
 
 const viewCtx = view.getContext('2d');
 let layers = []; // {canvas,ctx,name,offset:{x,y},visible,opacity}
@@ -27,6 +36,10 @@ let cropPending = false;
 let currentTextEditor = null; // {ta, layer, pending:{color,fontSize,fontFamily,bold}, commit, cancel}
 // Transform state for interactive transform tool
 let transformState = null; // {layer, cx, cy, w, h, rotation, scale, dragging, handle, startPos, startAngle, startScale}
+// Mask editing state
+let editMaskMode = false; // Whether to edit mask or layer content
+// Viewport transform state for zoom/drag
+let viewportTransform = { scale: 1, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0 };
 
 // History
 let history = [];
@@ -35,7 +48,7 @@ function pushHistory(){
   // capture state
   const snapshot = {layers: [], activeIndex: layers.indexOf(activeLayer)};
   for(const l of layers){
-    snapshot.layers.push({dataURL: l.canvas.toDataURL(), offset: {...l.offset}, visible: l.visible, opacity: l.opacity, name: l.name, blend: l.blend || 'source-over', mask: l.maskCanvas ? l.maskCanvas.toDataURL() : null});
+    snapshot.layers.push({dataURL: l.canvas.toDataURL(), offset: {...l.offset}, visible: l.visible, opacity: l.opacity, name: l.name, blend: l.blend || 'source-over', mask: l.maskCanvas ? l.maskCanvas.toDataURL() : null, locked: l.locked || false});
   }
   // trim redo
   history = history.slice(0, historyIndex+1);
@@ -54,7 +67,7 @@ async function restoreHistory(idx){
     await new Promise(r=> img.onload = r);
     const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
     const ctx = c.getContext('2d'); ctx.drawImage(img,0,0);
-    const layerObj = {canvas:c, ctx, name:item.name, offset:item.offset, visible:item.visible, opacity:item.opacity, blend: item.blend || 'source-over', maskCanvas: null};
+    const layerObj = {canvas:c, ctx, name:item.name, offset:item.offset, visible:item.visible, opacity:item.opacity, blend: item.blend || 'source-over', maskCanvas: null, locked: item.locked || false};
     if(item.mask){
       const mimg = new Image(); mimg.src = item.mask; await new Promise(r=> mimg.onload = r);
       const mc = document.createElement('canvas'); mc.width = mimg.width; mc.height = mimg.height; const mctx = mc.getContext('2d'); mctx.drawImage(mimg,0,0);
@@ -88,7 +101,9 @@ function createLayer(name='Layer'){
   // if desired size differs from current view, update view size so canvases align
   if(desiredW !== width || desiredH !== height){
     width = desiredW; height = desiredH;
-    view.width = width; view.height = height; view.style.width = width + 'px'; view.style.height = height + 'px';
+    view.width = width; view.height = height;
+    try{ updateCanvasSizeDisplay(); }catch(e){}
+    try{ updateViewportAspect(); }catch(e){}
   }
   const c = document.createElement('canvas');
   c.width = desiredW; c.height = desiredH;
@@ -97,7 +112,9 @@ function createLayer(name='Layer'){
   if(name && String(name).toLowerCase().includes('background')){
     ctx.save(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,c.width,c.height); ctx.restore();
   }
-  const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null};
+  // Lock background layers by default
+  const isBackground = name && String(name).toLowerCase().includes('background');
+  const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null, locked: isBackground};
   layers.push(layer);
   pushHistory();
   setActiveLayer(layers.length-1);
@@ -182,12 +199,32 @@ function renderLayersUI(){
     midRow.appendChild(controlWrap);
     meta.appendChild(midRow);
 
-    // mask control placed under the controlWrap to avoid overflowing the right column
-    const maskRow = document.createElement('div'); maskRow.className = 'layer-mask-row';
+    // place lock and mask buttons in a single control row (lock left, mask right)
+    const controlRow = document.createElement('div'); controlRow.className = 'layer-control-row';
+    const leftControls = document.createElement('div'); leftControls.className = 'layer-control-left';
+    const rightControls = document.createElement('div'); rightControls.className = 'layer-control-right';
+
+    // Lock button (left)
+    const lockBtn = document.createElement('button');
+    lockBtn.className = 'small lock-btn';
+    lockBtn.textContent = layer.locked ? '🔒 Unlock' : '🔓 Lock';
+    lockBtn.title = layer.locked ? 'Unlock this layer' : 'Lock this layer';
+    lockBtn.onclick = (ev) => {
+      ev.stopPropagation();
+      layer.locked = !layer.locked;
+      renderLayersUI();
+      pushHistory();
+    };
+    leftControls.appendChild(lockBtn);
+
+    // Mask button (right)
     const maskBtn = document.createElement('button'); maskBtn.className='small mask-btn'; maskBtn.textContent = layer.maskCanvas? 'Remove Mask' : 'Add Mask';
     maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; } renderLayersUI(); composite(); pushHistory(); };
-    maskRow.appendChild(maskBtn);
-    meta.appendChild(maskRow);
+    rightControls.appendChild(maskBtn);
+
+    controlRow.appendChild(leftControls);
+    controlRow.appendChild(rightControls);
+    meta.appendChild(controlRow);
 
     row.appendChild(meta);
     row.appendChild(controls);
@@ -195,8 +232,14 @@ function renderLayersUI(){
     // Row selection behavior
     row.classList.add('layer-row');
     if(layer === activeLayer) row.classList.add('active');
-    row.style.cursor = 'pointer';
-    row.onclick = ()=> setActiveLayer(i);
+    row.style.cursor = layer.locked ? 'not-allowed' : 'pointer';
+    row.onclick = ()=> {
+      if(layer.locked) {
+        alert('Cannot select a locked layer. Please unlock the layer first.');
+        return;
+      }
+      setActiveLayer(i);
+    };
     li.appendChild(row);
     layersList.appendChild(li);
   }
@@ -241,7 +284,8 @@ function composite(){
   // Composite layers with Photoshop-like blend modes by per-pixel blending when needed.
   viewCtx.clearRect(0,0,width,height);
   const tmp = document.createElement('canvas'); tmp.width = width; tmp.height = height;
-  // contexts used for readback should set willReadFrequently to true
+    // contexts used for readback should set willReadFrequently to true.
+    // This is important for performance when dealing with large images.
   const tctx = tmp.getContext('2d', { willReadFrequently: true });
   const accCanvas = document.createElement('canvas'); accCanvas.width = width; accCanvas.height = height;
   const accCtx = accCanvas.getContext('2d', { willReadFrequently: true });
@@ -305,31 +349,37 @@ function composite(){
     const srcImg = tctx.getImageData(lx0, ly0, rw, rh);
     blendRectToAcc(lx0, ly0, rw, rh, srcImg, layer);
   }
-  // draw accumulator to view
-  viewCtx.drawImage(accCanvas, 0,0);
+  // draw accumulator to view with viewport transformation
+  viewCtx.save();
+  viewCtx.clearRect(0, 0, width, height);
+  viewCtx.translate(viewportTransform.offsetX, viewportTransform.offsetY);
+  viewCtx.scale(viewportTransform.scale, viewportTransform.scale);
+  viewCtx.drawImage(accCanvas, 0, 0);
+  viewCtx.restore();
   // draw transform preview if active
   if(transformState){
     const ts = transformState;
     const l = ts.layer;
-    // center in canvas coords
-    const cx = l.offset.x + l.canvas.width/2;
-    const cy = l.offset.y + l.canvas.height/2;
+    // center of the bbox in canvas coords
+    const cx = l.offset.x + ts.bounds.x + ts.bounds.w/2;
+    const cy = l.offset.y + ts.bounds.y + ts.bounds.h/2;
     viewCtx.save();
     viewCtx.translate(cx, cy);
     viewCtx.rotate(ts.rotation);
     viewCtx.scale(ts.scale, ts.scale);
     viewCtx.globalAlpha = l.opacity;
-    viewCtx.drawImage(l.canvas, -l.canvas.width/2, -l.canvas.height/2);
+    // draw only the bbox (tight pixels) centered
+    viewCtx.drawImage(ts.bboxCanvas, -ts.bounds.w/2, -ts.bounds.h/2);
     viewCtx.restore();
 
     // draw bounding box + handles
-    const w = l.canvas.width * ts.scale; const h = l.canvas.height * ts.scale;
-    // corners in canvas coords after transform
+    const w = ts.bounds.w * ts.scale; const h = ts.bounds.h * ts.scale;
+    // corners in canvas coords after transform (relative to bbox center)
     const corners = [
-      {x:-l.canvas.width/2, y:-l.canvas.height/2},
-      {x:l.canvas.width/2, y:-l.canvas.height/2},
-      {x:l.canvas.width/2, y:l.canvas.height/2},
-      {x:-l.canvas.width/2, y:l.canvas.height/2}
+      {x:-ts.bounds.w/2, y:-ts.bounds.h/2},
+      {x:ts.bounds.w/2, y:-ts.bounds.h/2},
+      {x:ts.bounds.w/2, y:ts.bounds.h/2},
+      {x:-ts.bounds.w/2, y:ts.bounds.h/2}
     ].map(p=>{
       const x = p.x * ts.scale; const y = p.y * ts.scale;
       const rx = x * Math.cos(ts.rotation) - y * Math.sin(ts.rotation);
@@ -358,25 +408,48 @@ function getPos(e){
   const rect = view.getBoundingClientRect();
   const x = (e.clientX - rect.left) * (view.width/rect.width);
   const y = (e.clientY - rect.top) * (view.height/rect.height);
-  return {x,y};
+  // Apply inverse viewport transformation to get canvas coordinates
+  const canvasX = (x - viewportTransform.offsetX) / viewportTransform.scale;
+  const canvasY = (y - viewportTransform.offsetY) / viewportTransform.scale;
+  return {x: canvasX, y: canvasY};
+}
+
+// Update the canvas size display in the UI
+function updateCanvasSizeDisplay(){
+  const el = document.getElementById('canvas-size');
+  if(!el) return;
+  el.textContent = width + ' × ' + height + ' px';
 }
 
 view.addEventListener('mousedown', (e)=>{
+  // Only allow left mouse button (button 0) for tool operations
+  // Right click (button 2) and middle click (button 1) should not activate tools
+  if(e.button !== 0) return;
+  
   // allow some tools even when there's no active layer (text, crop)
   if(!activeLayer && !['text','crop'].includes(tool)) return;
+  
+  // Prevent editing of locked layers for drawing tools
+  if(activeLayer.locked && ['brush', 'eraser', 'fill', 'move'].includes(tool)) {
+    alert('Cannot edit a locked layer. Please unlock the layer first.');
+    return;
+  }
   // transform interactive start
   if(tool === 'transform'){
-    if(!transformState) startTransform(activeLayer);
+    if(!transformState) {
+      startTransform(activeLayer);
+      renderToolProps();
+    }
     const pos = getPos(e);
     const ts = transformState; if(!ts) return;
     const l = ts.layer;
-    const cx = l.offset.x + l.canvas.width/2; const cy = l.offset.y + l.canvas.height/2;
+    const cx = l.offset.x + ts.bounds.x + ts.bounds.w/2; const cy = l.offset.y + ts.bounds.y + ts.bounds.h/2;
     // compute corners
     const corners = [
-      {x:-l.canvas.width/2, y:-l.canvas.height/2},
-      {x:l.canvas.width/2, y:-l.canvas.height/2},
-      {x:l.canvas.width/2, y:l.canvas.height/2},
-      {x:-l.canvas.width/2, y:l.canvas.height/2}
+      {x:-ts.bounds.w/2, y:-ts.bounds.h/2},
+      {x:ts.bounds.w/2, y:-ts.bounds.h/2},
+      {x:ts.bounds.w/2, y:ts.bounds.h/2},
+      {x:-ts.bounds.w/2, y:ts.bounds.h/2}
     ].map(p=>{ const x = p.x * ts.scale; const y = p.y * ts.scale; const rx = x * Math.cos(ts.rotation) - y * Math.sin(ts.rotation); const ry = x * Math.sin(ts.rotation) + y * Math.cos(ts.rotation); return {x: cx + rx, y: cy + ry}; });
     const topCenter = {x: Math.round((corners[0].x + corners[1].x)/2), y: Math.round((corners[0].y + corners[1].y)/2)};
     const rotHandle = {x: topCenter.x, y: topCenter.y - 30};
@@ -397,7 +470,7 @@ view.addEventListener('mousedown', (e)=>{
       // inverse rotate/scale
       const ix = (lx * Math.cos(-ts.rotation) - ly * Math.sin(-ts.rotation)) / ts.scale;
       const iy = (lx * Math.sin(-ts.rotation) + ly * Math.cos(-ts.rotation)) / ts.scale;
-      if(Math.abs(ix) <= l.canvas.width/2 && Math.abs(iy) <= l.canvas.height/2){ ts.dragging = true; ts.handle = 'move'; last = pos; }
+      if(Math.abs(ix) <= ts.bounds.w/2 && Math.abs(iy) <= ts.bounds.h/2){ ts.dragging = true; ts.handle = 'move'; last = pos; }
     }
     return;
   }
@@ -560,15 +633,30 @@ view.addEventListener('mousedown', (e)=>{
   }
 
   drawing = true; last = getPos(e);
-  const ctx = activeLayer.ctx;
+  
+  // Determine if we should edit the mask or the main layer
+  const isEditingMask = editMaskMode && activeLayer.maskCanvas && (tool === 'brush' || tool === 'eraser');
+  const ctx = isEditingMask ? activeLayer.maskCanvas.getContext('2d') : activeLayer.ctx;
+  
   ctx.lineJoin = ctx.lineCap = 'round';
   ctx.lineWidth = size;
+  
   if(tool==='eraser'){
-    ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.globalAlpha = toolOpacity;
+    ctx.save(); 
+    ctx.globalCompositeOperation = 'destination-out'; 
+    ctx.globalAlpha = toolOpacity;
   } else {
-    ctx.save(); ctx.globalCompositeOperation = 'source-over'; ctx.strokeStyle = color; ctx.globalAlpha = toolOpacity;
+    ctx.save(); 
+    ctx.globalCompositeOperation = 'source-over'; 
+    ctx.strokeStyle = isEditingMask ? (tool === 'brush' ? 'white' : color) : color;
+    ctx.globalAlpha = toolOpacity;
   }
-  ctx.beginPath(); ctx.moveTo(last.x - activeLayer.offset.x, last.y - activeLayer.offset.y);
+  
+  // Adjust position for mask editing (masks are not offset like layers)
+  const adjX = isEditingMask ? last.x : last.x - activeLayer.offset.x;
+  const adjY = isEditingMask ? last.y : last.y - activeLayer.offset.y;
+  
+  ctx.beginPath(); ctx.moveTo(adjX, adjY);
 });
 
 view.addEventListener('mousemove', (e)=>{
@@ -576,7 +664,7 @@ view.addEventListener('mousemove', (e)=>{
   // handle transform dragging
   if(transformState && transformState.dragging){
     const ts = transformState; const l = ts.layer;
-    const cx = l.offset.x + l.canvas.width/2; const cy = l.offset.y + l.canvas.height/2;
+    const cx = l.offset.x + ts.bounds.x + ts.bounds.w/2; const cy = l.offset.y + ts.bounds.y + ts.bounds.h/2;
     if(ts.handle === 'scale'){
       const curDist = Math.hypot(pos.x - cx, pos.y - cy);
       const ns = Math.max(0.01, ts.startScale * (curDist / ts.startDist)); ts.scale = ns; composite(); return;
@@ -587,6 +675,11 @@ view.addEventListener('mousemove', (e)=>{
     }
   }
   if(!drawing) return;
+  
+  // Only allow drawing with left mouse button (button 0)
+  // This prevents right-click and middle-click from activating drawing tools
+  if(e.buttons !== 1) return;
+  
   // allow selection/crop to update even when no active layer exists
   if(tool === 'select' || tool === 'crop'){
     if(!selection) return;
@@ -609,13 +702,22 @@ view.addEventListener('mousemove', (e)=>{
   }
   // remaining drawing tools require an active layer
   if(!activeLayer) return;
-  const ctx = activeLayer.ctx;
+  
+  // Determine if we should edit the mask or the main layer
+  const isEditingMask = editMaskMode && activeLayer.maskCanvas && (tool === 'brush' || tool === 'eraser');
+  const ctx = isEditingMask ? activeLayer.maskCanvas.getContext('2d') : activeLayer.ctx;
+  
   if(tool==='move'){
     const dx = pos.x - last.x; const dy = pos.y - last.y;
     activeLayer.offset.x += dx; activeLayer.offset.y += dy;
     last = pos; composite(); return;
   }
-  ctx.lineTo(pos.x - activeLayer.offset.x, pos.y - activeLayer.offset.y);
+  
+  // Adjust position for mask editing (masks are not offset like layers)
+  const adjX = isEditingMask ? pos.x : pos.x - activeLayer.offset.x;
+  const adjY = isEditingMask ? pos.y : pos.y - activeLayer.offset.y;
+  
+  ctx.lineTo(adjX, adjY);
   ctx.stroke(); composite();
   last = pos;
 });
@@ -624,8 +726,7 @@ window.addEventListener('mouseup', ()=>{
   // handle transform mouseup
   if(transformState && transformState.dragging){
     transformState.dragging = false;
-    // commit the transform on mouseup
-    commitTransform();
+    // do not auto-commit here; leave transformState active until user explicitly commits or cancels
     return;
   }
   if(!drawing) return;
@@ -667,7 +768,12 @@ window.addEventListener('mouseup', ()=>{
     return;
   }
 
-  try{ activeLayer.ctx.restore(); }catch(e){}
+  try{
+    // Restore the appropriate context based on whether we were editing a mask
+    const isEditingMask = activeLayer.maskCanvas && (tool === 'brush' || tool === 'eraser');
+    const ctx = isEditingMask ? activeLayer.maskCanvas.getContext('2d') : activeLayer.ctx;
+    ctx.restore();
+  }catch(e){}
   pushHistory();
 });
 
@@ -721,6 +827,23 @@ function renderToolProps(){
     const opVal = document.createElement('div'); opVal.className='prop-value'; opVal.textContent = Math.round(toolOpacity*100) + '%';
     opRow.appendChild(opRange); opRow.appendChild(opVal); opBlk.appendChild(opRow);
 
+    // Add mask editing toggle if layer has a mask
+    if(activeLayer && activeLayer.maskCanvas){
+      const maskBlk = createBlock('Mask Editing');
+      const maskToggle = document.createElement('label');
+      maskToggle.style.display = 'flex'; maskToggle.style.alignItems = 'center'; maskToggle.style.gap = '8px';
+      const maskCheckbox = document.createElement('input'); maskCheckbox.type = 'checkbox';
+      maskCheckbox.checked = editMaskMode; // Use current mode
+      maskCheckbox.onchange = (e) => {
+        editMaskMode = e.target.checked;
+      };
+      const maskLabel = document.createElement('span'); maskLabel.textContent = 'Edit Mask';
+      maskLabel.style.color = '#a9b6d8'; maskLabel.style.fontSize = '14px';
+      maskToggle.appendChild(maskCheckbox); maskToggle.appendChild(maskLabel);
+      maskBlk.appendChild(maskToggle);
+      el.appendChild(maskBlk);
+    }
+
     el.appendChild(colorBlk); el.appendChild(sizeBlk); el.appendChild(opBlk);
   } else if(tool === 'eraser'){
     const sizeBlk = createBlock('Size');
@@ -733,7 +856,35 @@ function renderToolProps(){
     const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
     const opVal = document.createElement('div'); opVal.className='prop-value'; opVal.textContent = Math.round(toolOpacity*100) + '%';
     opRow.appendChild(opRange); opRow.appendChild(opVal); opBlk.appendChild(opRow);
+
+    // Add mask editing toggle if layer has a mask
+    if(activeLayer && activeLayer.maskCanvas){
+      const maskBlk = createBlock('Mask Editing');
+      const maskToggle = document.createElement('label');
+      maskToggle.style.display = 'flex'; maskToggle.style.alignItems = 'center'; maskToggle.style.gap = '8px';
+      const maskCheckbox = document.createElement('input'); maskCheckbox.type = 'checkbox';
+      maskCheckbox.checked = editMaskMode; // Use current mode
+      maskCheckbox.onchange = (e) => {
+        editMaskMode = e.target.checked;
+      };
+      const maskLabel = document.createElement('span'); maskLabel.textContent = 'Edit Mask';
+      maskLabel.style.color = '#a9b6d8'; maskLabel.style.fontSize = '14px';
+      maskToggle.appendChild(maskCheckbox); maskToggle.appendChild(maskLabel);
+      maskBlk.appendChild(maskToggle);
+      el.appendChild(maskBlk);
+    }
+
     el.appendChild(sizeBlk); el.appendChild(opBlk);
+  } else if(tool === 'transform'){
+    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Transform active layer pixels (tight bounds). Use handles to scale/rotate, Move to drag.'; el.appendChild(help);
+    if(transformState){
+      const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
+      const ok = document.createElement('button'); ok.textContent = 'Commit Transform'; ok.onclick = ()=>{ try{ commitTransform(); }catch(e){} };
+      const cancel = document.createElement('button'); cancel.textContent = 'Cancel Transform'; cancel.onclick = ()=>{ try{ cancelTransform(); }catch(e){} };
+      row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
+    } else {
+      const info = document.createElement('div'); info.style.color='#999'; info.style.fontSize='12px'; info.textContent='Click the canvas to begin transforming the active layer.'; el.appendChild(info);
+    }
   } else if(tool === 'text'){
     const colorBlk = createBlock('Color');
     const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value=color;
@@ -921,6 +1072,23 @@ function applyMaskToLayer(mask, maskW, maskH, layer, fillHex){
   layer.ctx.putImageData(img,0,0);
 }
 
+// Find tight bounding box of non-transparent pixels in a layer's canvas
+function getLayerContentBounds(layer){
+  const w = layer.canvas.width, h = layer.canvas.height;
+  try{
+    const img = layer.ctx.getImageData(0,0,w,h).data;
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const idx = (y*w + x)*4 + 3; // alpha
+        if(img[idx] !== 0){ if(x < minX) minX = x; if(x > maxX) maxX = x; if(y < minY) minY = y; if(y > maxY) maxY = y; }
+      }
+    }
+    if(maxX < 0) return { x: 0, y: 0, w: w, h: h }; // empty -> whole canvas
+    return { x: minX, y: minY, w: (maxX - minX + 1), h: (maxY - minY + 1) };
+  }catch(e){ return { x: 0, y: 0, w: w, h: h }; }
+}
+
 document.getElementById('add-layer').addEventListener('click', ()=> createLayer('Layer ' + (layers.length+1)));
 document.getElementById('del-layer').addEventListener('click', ()=> deleteActiveLayer());
 document.getElementById('export').addEventListener('click', exportPNG);
@@ -931,26 +1099,86 @@ fileInput.addEventListener('change', handleFile);
 const undoBtn = document.getElementById('undo'); if(undoBtn) undoBtn.addEventListener('click', ()=> undo());
 const redoBtn = document.getElementById('redo'); if(redoBtn) redoBtn.addEventListener('click', ()=> redo());
 
+// Zoom control buttons
+document.getElementById('zoom-in')?.addEventListener('click', () => {
+  viewportTransform.scale = Math.min(5, viewportTransform.scale * 1.2);
+  composite();
+});
+
+document.getElementById('zoom-out')?.addEventListener('click', () => {
+  viewportTransform.scale = Math.max(0.1, viewportTransform.scale * 0.8);
+  composite();
+});
+
+document.getElementById('reset-zoom')?.addEventListener('click', () => {
+  viewportTransform.scale = 1;
+  viewportTransform.offsetX = 0;
+  viewportTransform.offsetY = 0;
+  composite();
+});
+
+// Resize modal event listeners
+document.getElementById('close-resize-modal').addEventListener('click', closeResizeModal);
+document.getElementById('cancel-resize').addEventListener('click', closeResizeModal);
+document.getElementById('confirm-resize').addEventListener('click', confirmResize);
+
+// Show resize canvas modal
 function resizeCanvas(){
-  const newWidth = prompt('Enter new canvas width:', width);
-  const newHeight = prompt('Enter new canvas height:', height);
-  if (newWidth === null || newHeight === null) return;
+  const modal = document.getElementById('resize-modal');
+  const widthInput = document.getElementById('new-width');
+  const heightInput = document.getElementById('new-height');
+  const maintainAspect = document.getElementById('maintain-aspect');
   
-  const parsedWidth = parseInt(newWidth);
-  const parsedHeight = parseInt(newHeight);
+  // Set current dimensions
+  widthInput.value = width;
+  heightInput.value = height;
   
-  if (isNaN(parsedWidth) || isNaN(parsedHeight) || parsedWidth <= 0 || parsedHeight <= 0) {
+  // Show modal
+  modal.style.display = 'block';
+  
+  // Handle aspect ratio maintenance
+  maintainAspect.addEventListener('change', function() {
+    if (this.checked) {
+      const ratio = width / height;
+      widthInput.addEventListener('input', function() {
+        const newWidth = parseInt(widthInput.value) || 1;
+        heightInput.value = Math.round(newWidth / ratio);
+      });
+      heightInput.addEventListener('input', function() {
+        const newHeight = parseInt(heightInput.value) || 1;
+        widthInput.value = Math.round(newHeight * ratio);
+      });
+    } else {
+      widthInput.removeEventListener('input', null);
+      heightInput.removeEventListener('input', null);
+    }
+  });
+}
+
+// Close resize modal
+function closeResizeModal() {
+  document.getElementById('resize-modal').style.display = 'none';
+}
+
+// Confirm resize and apply changes
+function confirmResize() {
+  const widthInput = document.getElementById('new-width');
+  const heightInput = document.getElementById('new-height');
+  
+  const newWidth = parseInt(widthInput.value);
+  const newHeight = parseInt(heightInput.value);
+  
+  if (isNaN(newWidth) || isNaN(newHeight) || newWidth <= 0 || newHeight <= 0) {
     alert('Please enter valid dimensions.');
     return;
   }
   
   // Update the canvas dimensions
-  width = parsedWidth;
-  height = parsedHeight;
+  width = newWidth;
+  height = newHeight;
   view.width = width;
   view.height = height;
-  view.style.width = width + 'px';
-  view.style.height = height + 'px';
+  try{ updateViewportAspect(); }catch(e){}
   
   // Resize each layer's canvas
   for (const layer of layers) {
@@ -958,24 +1186,98 @@ function resizeCanvas(){
     newCanvas.width = width;
     newCanvas.height = height;
     const newCtx = newCanvas.getContext('2d');
-    
-    // Draw the existing layer content onto the new canvas
-    newCtx.drawImage(layer.canvas, 0, 0);
-    
+    // If this is a background layer, preserve background fill (white)
+    const isBackground = layer.name && String(layer.name).toLowerCase().includes('background');
+    if (isBackground) {
+      newCtx.save();
+      newCtx.fillStyle = '#ffffff';
+      newCtx.fillRect(0, 0, newCanvas.width, newCanvas.height);
+      newCtx.restore();
+    }
+
+    // Draw the existing layer content onto the new canvas (keeps existing pixels at 0,0)
+    try { newCtx.drawImage(layer.canvas, 0, 0); } catch (e) { /* ignore */ }
+
+    // Replace layer canvas/context
     layer.canvas = newCanvas;
     layer.ctx = newCtx;
+
+    // Resize maskCanvas if present (masks default to white)
+    if (layer.maskCanvas) {
+      const newMask = document.createElement('canvas');
+      newMask.width = width; newMask.height = height;
+      const mctx = newMask.getContext('2d');
+      // fill mask with white (visible) by default, then draw existing mask
+      mctx.save(); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,newMask.width,newMask.height); mctx.restore();
+      try { mctx.drawImage(layer.maskCanvas, 0, 0); } catch(e) { /* ignore */ }
+      layer.maskCanvas = newMask;
+    }
   }
   
   composite();
   pushHistory();
+  
+  // Update UI display for canvas size
+  try{ updateCanvasSizeDisplay(); }catch(e){}
+
+  // Close modal
+  closeResizeModal();
 }
 
 function handleFile(e){
   const f = e.target.files[0]; if(!f) return;
   const img = new Image(); img.onload = ()=>{
+    // If user requested, resize the canvas to the imported image size first
+    const resizeCheckbox = document.getElementById('import-resize');
+    const resizeToImage = resizeCheckbox && resizeCheckbox.checked;
+    if(resizeToImage){
+      const newWidth = img.width; const newHeight = img.height;
+      // Update view dimensions
+      width = newWidth; height = newHeight;
+      view.width = width; view.height = height;
+      try{ updateViewportAspect(); }catch(e){}
+
+      // Resize each layer's canvas and masks similar to confirmResize
+      for (const layer of layers) {
+        const newCanvas = document.createElement('canvas');
+        newCanvas.width = width; newCanvas.height = height;
+        const newCtx = newCanvas.getContext('2d');
+        const isBackground = layer.name && String(layer.name).toLowerCase().includes('background');
+        if (isBackground) {
+          newCtx.save(); newCtx.fillStyle = '#ffffff'; newCtx.fillRect(0, 0, newCanvas.width, newCanvas.height); newCtx.restore();
+        }
+        try { newCtx.drawImage(layer.canvas, 0, 0); } catch (e) { /* ignore */ }
+        layer.canvas = newCanvas; layer.ctx = newCtx;
+        if (layer.maskCanvas) {
+          const newMask = document.createElement('canvas'); newMask.width = width; newMask.height = height; const mctx = newMask.getContext('2d');
+          mctx.save(); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,newMask.width,newMask.height); mctx.restore();
+          try { mctx.drawImage(layer.maskCanvas, 0, 0); } catch(e) { /* ignore */ }
+          layer.maskCanvas = newMask;
+        }
+      }
+      try{ updateCanvasSizeDisplay(); }catch(e){}
+      // Reset viewport transform so the view shows at 1:1 pixel scale after resizing
+      viewportTransform.scale = 1;
+      viewportTransform.offsetX = 0;
+      viewportTransform.offsetY = 0;
+    }
+
+    // Create imported layer and draw the image. If we resized canvas to image dimensions, draw at native size.
     createLayer('Imported');
     const l = activeLayer;
-    l.ctx.drawImage(img, 0, 0, width, height);
+    if(resizeToImage){
+      try{ l.ctx.drawImage(img, 0, 0); } catch(e) { /* ignore */ }
+    } else {
+      // Draw image preserving aspect ratio and center it within the canvas
+      const imgW = img.width, imgH = img.height;
+      const maxW = width, maxH = height;
+      const scale = Math.min(maxW / imgW, maxH / imgH, 1);
+      const drawW = Math.round(imgW * scale);
+      const drawH = Math.round(imgH * scale);
+      const dx = Math.round((maxW - drawW) / 2);
+      const dy = Math.round((maxH - drawH) / 2);
+      try { l.ctx.drawImage(img, 0, 0, imgW, imgH, dx, dy, drawW, drawH); } catch(e) { /* ignore */ }
+    }
     composite();
     pushHistory();
   };
@@ -999,11 +1301,33 @@ function doTransform(){
   document.querySelectorAll('.tool').forEach(b=>b.classList.remove('active'));
   const btn = document.getElementById('tool-transform'); if(btn) btn.classList.add('active');
   startTransform(activeLayer);
+  // update tool properties UI to show commit/cancel
+  renderToolProps();
 }
 
 function startTransform(layer){
   if(!layer) return;
-  transformState = {layer, rotation:0, scale:1, dragging:false, handle:null, startPos:null, startAngle:0, startScale:1};
+  // compute tight content bounds for the layer (ignore fully transparent areas)
+  const bounds = getLayerContentBounds(layer);
+  // create a cropped canvas of the layer content we will transform
+  const bboxCanvas = document.createElement('canvas'); bboxCanvas.width = Math.max(1, bounds.w); bboxCanvas.height = Math.max(1, bounds.h);
+  const bctx = bboxCanvas.getContext('2d');
+  try{ bctx.drawImage(layer.canvas, bounds.x, bounds.y, bounds.w, bounds.h, 0, 0, bounds.w, bounds.h); }catch(e){}
+
+  transformState = {
+    layer,
+    rotation:0,
+    scale:1,
+    dragging:false,
+    handle:null,
+    startPos:null,
+    startAngle:0,
+    startScale:1,
+    bounds,
+    bboxCanvas,
+    // snapshot original offset so we can compute placement
+    origOffset: { x: layer.offset.x, y: layer.offset.y }
+  };
   // focus for keyboard commit/cancel
   window.addEventListener('keydown', transformKeyHandler);
   composite();
@@ -1019,26 +1343,104 @@ function transformKeyHandler(e){
 }
 
 function cancelTransform(){
-  transformState = null; window.removeEventListener('keydown', transformKeyHandler); composite();
+  transformState = null; window.removeEventListener('keydown', transformKeyHandler); composite(); renderToolProps();
 }
 
 function commitTransform(){
   if(!transformState) return;
   const ts = transformState; const l = ts.layer;
-  // rasterize transformed pixels into a new canvas (same size as source)
-  const src = l.canvas;
-  const out = document.createElement('canvas'); out.width = src.width; out.height = src.height;
+  
+  // Calculate the visual center of the transformed content
+  // The center point relative to the layer's canvas
+  const centerX = ts.bounds.x + ts.bounds.w/2;
+  const centerY = ts.bounds.y + ts.bounds.h/2;
+  
+  // Calculate the new bounding box after transformation
+  // Get the corners of the original bounding box
+  const corners = [
+    {x: ts.bounds.x, y: ts.bounds.y},
+    {x: ts.bounds.x + ts.bounds.w, y: ts.bounds.y},
+    {x: ts.bounds.x + ts.bounds.w, y: ts.bounds.y + ts.bounds.h},
+    {x: ts.bounds.x, y: ts.bounds.y + ts.bounds.h}
+  ];
+  
+  // Apply rotation and scaling to each corner
+  const transformedCorners = corners.map(c => {
+    // Translate to origin (relative to center)
+    const tx = c.x - centerX;
+    const ty = c.y - centerY;
+    
+    // Apply rotation
+    const rx = tx * Math.cos(ts.rotation) - ty * Math.sin(ts.rotation);
+    const ry = tx * Math.sin(ts.rotation) + ty * Math.cos(ts.rotation);
+    
+    // Apply scaling
+    const sx = rx * ts.scale;
+    const sy = ry * ts.scale;
+    
+    // Translate back
+    return {
+      x: centerX + sx,
+      y: centerY + sy
+    };
+  });
+  
+  // Find the new bounding box
+  const minX = Math.min(...transformedCorners.map(c => c.x));
+  const maxX = Math.max(...transformedCorners.map(c => c.x));
+  const minY = Math.min(...transformedCorners.map(c => c.y));
+  const maxY = Math.max(...transformedCorners.map(c => c.y));
+  
+  const newBounds = {
+    x: minX,
+    y: minY,
+    w: maxX - minX,
+    h: maxY - minY
+  };
+  
+  // Calculate the offset adjustment to keep the visual center in the same place
+  const newCenterX = newBounds.x + newBounds.w/2;
+  const newCenterY = newBounds.y + newBounds.h/2;
+  
+  // Calculate the adjustment needed to keep the visual center in the same absolute position
+  // Convert to absolute coordinates for the adjustment calculation
+  const absCenterX = l.offset.x + centerX;
+  const absCenterY = l.offset.y + centerY;
+  const absNewCenterX = l.offset.x + newCenterX;
+  const absNewCenterY = l.offset.y + newCenterY;
+  
+  const offsetAdjustX = (absCenterX - absNewCenterX);
+  const offsetAdjustY = (absCenterY - absNewCenterY);
+  
+  // Update the layer's offset to compensate for the transformation
+  l.offset.x += offsetAdjustX;
+  l.offset.y += offsetAdjustY;
+  
+  // Create an output canvas same size as the layer to preserve layer dimensions
+  const out = document.createElement('canvas'); out.width = l.canvas.width; out.height = l.canvas.height;
   const octx = out.getContext('2d');
+  // copy original content except the area covered by the original bbox (we will replace it)
+  octx.drawImage(l.canvas, 0, 0);
+  // clear original bbox area
+  octx.clearRect(ts.bounds.x, ts.bounds.y, ts.bounds.w, ts.bounds.h);
+
+  // draw transformed bboxCanvas into the correct place
   octx.save();
-  // translate to center of layer canvas
-  octx.translate(src.width/2, src.height/2);
+  // compute center point in canvas coords where bbox center should be
+  // This should be relative to the layer's canvas
+  const cx = centerX;
+  const cy = centerY;
+  octx.translate(cx, cy);
   octx.rotate(ts.rotation);
   octx.scale(ts.scale, ts.scale);
-  octx.drawImage(src, -src.width/2, -src.height/2);
+  // draw bbox centered
+  octx.drawImage(ts.bboxCanvas, -ts.bounds.w/2, -ts.bounds.h/2);
   octx.restore();
+
+  // replace layer canvas with out
   l.canvas = out; l.ctx = out.getContext('2d');
   transformState = null; window.removeEventListener('keydown', transformKeyHandler);
-  pushHistory(); renderLayersUI(); composite();
+  pushHistory(); renderLayersUI(); composite(); renderToolProps();
 }
 
 // Crop commit/cancel helpers
@@ -1063,7 +1465,7 @@ function commitCrop(){
       }
       layer.canvas = newC; layer.ctx = nctx; layer.offset.x = layer.offset.x - sx; layer.offset.y = layer.offset.y - sy;
     }
-    width = sw; height = sh; view.width = width; view.height = height; view.style.width = width + 'px'; view.style.height = height + 'px';
+    width = sw; height = sh; view.width = width; view.height = height; try{ updateViewportAspect(); }catch(e){}
     renderLayersUI(); composite(); pushHistory();
   }
   selection = null; cropPending = false; renderToolProps();
@@ -1074,9 +1476,81 @@ function cancelCrop(){
   selection = null; cropPending = false; renderToolProps();
 }
 
-// Init default
+// Zoom and drag functionality
+function setupViewportControls() {
+  // Middle mouse button or space + left mouse for dragging
+  viewport.addEventListener('mousedown', (e) => {
+    if (e.button === 1 || (e.button === 0 && e.ctrlKey)) { // Middle button or Ctrl+Left
+      viewportTransform.isDragging = true;
+      viewportTransform.startX = e.clientX - viewportTransform.offsetX;
+      viewportTransform.startY = e.clientY - viewportTransform.offsetY;
+      viewport.style.cursor = 'grabbing';
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (viewportTransform.isDragging) {
+      viewportTransform.offsetX = e.clientX - viewportTransform.startX;
+      viewportTransform.offsetY = e.clientY - viewportTransform.startY;
+      composite();
+    }
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (viewportTransform.isDragging) {
+      viewportTransform.isDragging = false;
+      viewport.style.cursor = '';
+    }
+  });
+
+  // Mouse wheel for zooming
+  viewport.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    
+    // Get mouse position relative to viewport
+    const rect = viewport.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Calculate zoom factor
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    const oldScale = viewportTransform.scale;
+    const newScale = Math.max(0.1, Math.min(5, viewportTransform.scale * zoomFactor));
+    
+    // Zoom towards mouse cursor
+    viewportTransform.offsetX = mouseX - (mouseX - viewportTransform.offsetX) * (newScale / oldScale);
+    viewportTransform.offsetY = mouseY - (mouseY - viewportTransform.offsetY) * (newScale / oldScale);
+    viewportTransform.scale = newScale;
+    
+    composite();
+  });
+
+  // Reset view button
+  const resetViewBtn = document.createElement('button');
+  resetViewBtn.textContent = 'Reset View';
+  resetViewBtn.style.position = 'absolute';
+  resetViewBtn.style.bottom = '10px';
+  resetViewBtn.style.right = '10px';
+  resetViewBtn.style.zIndex = '100';
+  resetViewBtn.style.padding = '8px 12px';
+  resetViewBtn.style.background = 'rgba(255,255,255,0.1)';
+  resetViewBtn.style.color = 'white';
+  resetViewBtn.style.border = '1px solid rgba(255,255,255,0.2)';
+  resetViewBtn.style.borderRadius = '6px';
+  resetViewBtn.style.cursor = 'pointer';
+  resetViewBtn.addEventListener('click', () => {
+    viewportTransform.scale = 1;
+    viewportTransform.offsetX = 0;
+    viewportTransform.offsetY = 0;
+    composite();
+  });
+  viewport.appendChild(resetViewBtn);
+}
+
+// Init default - only create Background layer
 createLayer('Background');
-createLayer('Layer 1');
-setActiveLayer(1);
+setupViewportControls();
 composite();
 renderToolProps();
+updateCanvasSizeDisplay();
