@@ -2,7 +2,7 @@ PhotoEasy — Browser Photoshop Clone (Minimal Demo)
 
 Quick start:
 
-1. Open a terminal in this folder (`src/photoeasy`).
+1. Open a terminal in this folder.
 2. Serve files (example):
 
 ```powershell
