@@ -3,6 +3,14 @@ const view = document.getElementById('view');
 const viewport = document.getElementById('viewport');
 const layersList = document.getElementById('layers-list');
 const fileInput = document.getElementById('file-input');
+const canvasOnboarding = document.getElementById('canvas-onboarding');
+const toolHintEl = document.getElementById('tool-hint');
+const historyLabelEl = document.getElementById('history-label');
+const statusStackEl = document.getElementById('status-stack');
+const zoomReadoutEl = document.getElementById('zoom-readout');
+const sidebar = document.getElementById('sidebar');
+const toolPropsPanel = document.getElementById('tool-props');
+const layersPanel = document.getElementById('layers-panel');
 
 let width = 1200, height = 700;
 // Keep the preview canvas sized to the viewport and render the document inside it.
@@ -45,6 +53,247 @@ let transformState = null; // {layer, cx, cy, w, h, rotation, scale, dragging, h
 let editMaskMode = false; // Whether to edit mask or layer content
 // Viewport transform state for zoom/drag. scale is a multiplier on top of fit-to-panel.
 let viewportTransform = { scale: 1, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0 };
+let layerDragIndex = null;
+
+const cursorPreview = document.createElement('div');
+cursorPreview.className = 'cursor-preview';
+viewport.appendChild(cursorPreview);
+
+const TOOL_META = {
+  move: {
+    label: 'Move',
+    shortcut: 'V',
+    hint: 'Move: drag the active layer. Middle-mouse or Ctrl+drag pans the view.'
+  },
+  brush: {
+    label: 'Brush',
+    shortcut: 'B',
+    hint: 'Brush: paint on the active layer. The ring shows your brush size.'
+  },
+  eraser: {
+    label: 'Eraser',
+    shortcut: 'E',
+    hint: 'Eraser: remove pixels on the active layer. Locked layers stay protected.'
+  },
+  fill: {
+    label: 'Fill',
+    shortcut: null,
+    hint: 'Fill: click an area to flood fill it on the active layer.'
+  },
+  crop: {
+    label: 'Crop',
+    shortcut: null,
+    hint: 'Crop: drag a crop area, then commit or cancel. Undo restores the previous canvas.'
+  },
+  select: {
+    label: 'Select',
+    shortcut: null,
+    hint: 'Select: drag a rectangle to lift pixels into a new layer.'
+  },
+  magic: {
+    label: 'Magic Wand',
+    shortcut: null,
+    hint: 'Magic Wand: click to build a visibility mask from matching composite pixels.'
+  },
+  transform: {
+    label: 'Transform',
+    shortcut: null,
+    hint: 'Transform: drag inside to move, corners to scale, and the top handle to rotate.'
+  },
+  zoom: {
+    label: 'Zoom',
+    shortcut: 'Z',
+    hint: 'Zoom: click to zoom in, Alt+click to zoom out, or press Ctrl+0 to fit the view.'
+  },
+  text: {
+    label: 'Text',
+    shortcut: 'T',
+    hint: 'Text: click to create, click existing text to edit, Ctrl+Enter to commit.'
+  }
+};
+
+function isPointInsideDocument(pos){
+  return pos.x >= 0 && pos.y >= 0 && pos.x <= width && pos.y <= height;
+}
+
+function isLayerEditLocked(){
+  return !!(activeLayer && activeLayer.locked && ['brush', 'eraser', 'fill', 'move', 'transform', 'select', 'magic', 'crop'].includes(tool));
+}
+
+function addStatus(message, type = 'info', timeout = 2600){
+  if(!statusStackEl) return;
+  const toast = document.createElement('div');
+  toast.className = 'status-toast is-' + type;
+  toast.textContent = message;
+  statusStackEl.appendChild(toast);
+  while(statusStackEl.children.length > 3){
+    statusStackEl.removeChild(statusStackEl.firstChild);
+  }
+  const removeToast = ()=>{
+    if(toast.parentNode) toast.parentNode.removeChild(toast);
+  };
+  if(timeout > 0){
+    window.setTimeout(removeToast, timeout);
+  }
+}
+
+function updateOnboarding(){
+  if(!canvasOnboarding) return;
+  const show = layers.length <= 1 && layers.every((layer)=> String(layer?.name || '').toLowerCase().includes('background'));
+  canvasOnboarding.classList.toggle('visible', show);
+}
+
+function updateToolHint(){
+  if(!toolHintEl) return;
+  if(currentTextEditor){
+    toolHintEl.textContent = 'Text: click inside the bounds to edit, Ctrl+Enter to commit, Esc to cancel.';
+    return;
+  }
+  if(cropPending){
+    toolHintEl.textContent = 'Crop: review the pending crop, then commit or cancel. Undo restores the previous canvas.';
+    return;
+  }
+  const meta = TOOL_META[tool] || { hint: 'Choose a tool to start editing.' };
+  toolHintEl.textContent = meta.hint;
+}
+
+function updateHistoryLabel(){
+  if(!historyLabelEl) return;
+  const currentLabel = history[historyIndex]?.label;
+  if(historyIndex <= 0 || !currentLabel || (currentLabel === 'Create Background' && layers.length <= 1)){
+    historyLabelEl.textContent = 'Undo ready';
+    return;
+  }
+  historyLabelEl.textContent = 'Undo: ' + currentLabel;
+}
+
+function updateZoomReadout(){
+  if(!zoomReadoutEl) return;
+  const display = getDisplayTransform();
+  zoomReadoutEl.textContent = Math.max(1, Math.round(display.totalScale * 100)) + '%';
+}
+
+function updateSidebarPriority(){
+  if(!sidebar || !toolPropsPanel || !layersPanel) return;
+  const toolPrimary = !!(currentTextEditor || cropPending || ['brush', 'eraser', 'fill', 'crop', 'magic', 'text', 'zoom'].includes(tool));
+  sidebar.classList.toggle('tool-primary', toolPrimary);
+  sidebar.classList.toggle('layers-primary', !toolPrimary);
+  toolPropsPanel.classList.toggle('is-primary', toolPrimary);
+  layersPanel.classList.toggle('is-primary', !toolPrimary);
+}
+
+function updateCanvasChrome(){
+  updateOnboarding();
+  updateToolHint();
+  updateHistoryLabel();
+  updateZoomReadout();
+  updateSidebarPriority();
+}
+
+function applyTooltips(){
+  const mapping = {
+    'tool-move': TOOL_META.move,
+    'tool-brush': TOOL_META.brush,
+    'tool-eraser': TOOL_META.eraser,
+    'tool-text': TOOL_META.text,
+    'tool-zoom': TOOL_META.zoom,
+    'zoom-fit': { label: 'Fit View', shortcut: 'Ctrl+0' },
+    'zoom-100': { label: 'Actual Size', shortcut: null },
+    'zoom-in': { label: 'Zoom In', shortcut: null },
+    'zoom-out': { label: 'Zoom Out', shortcut: null },
+    undo: { label: 'Undo', shortcut: 'Ctrl+Z' },
+    redo: { label: 'Redo', shortcut: 'Ctrl+Shift+Z' }
+  };
+  Object.entries(mapping).forEach(([id, meta])=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    const title = meta.shortcut ? meta.label + ' (' + meta.shortcut + ')' : meta.label;
+    el.title = title;
+    el.setAttribute('aria-label', title);
+  });
+}
+
+function fitView(showToast = false){
+  resetViewportTransform();
+  composite();
+  if(showToast) addStatus('View fit to window.', 'info');
+}
+
+function setActualSize(showToast = false){
+  const fitScale = Math.min(view.width / width, view.height / height) || 1;
+  viewportTransform.scale = 1 / fitScale;
+  viewportTransform.offsetX = 0;
+  viewportTransform.offsetY = 0;
+  composite();
+  if(showToast) addStatus('View set to 100%.', 'info');
+}
+
+function clearLayerDragState(){
+  document.querySelectorAll('#layers-list li').forEach((item)=>{
+    item.classList.remove('dragging', 'drop-before', 'drop-after');
+  });
+}
+
+function reorderLayer(fromIndex, targetIndex, placeAfter){
+  if(fromIndex == null || targetIndex == null || fromIndex === targetIndex) return;
+  const moved = layers[fromIndex];
+  if(!moved) return;
+  let insertIndex = placeAfter ? targetIndex + 1 : targetIndex;
+  layers.splice(fromIndex, 1);
+  if(fromIndex < insertIndex) insertIndex -= 1;
+  insertIndex = Math.max(0, Math.min(layers.length, insertIndex));
+  layers.splice(insertIndex, 0, moved);
+  activeLayer = moved;
+  renderLayersUI();
+  composite();
+  pushHistory('Reorder Layers');
+  addStatus('Layer order updated. Undo restores the previous order.', 'info');
+}
+
+function updateCursorFeedback(clientX, clientY){
+  if(typeof clientX !== 'number' || typeof clientY !== 'number'){
+    cursorPreview.classList.remove('visible');
+    viewport.style.cursor = viewportTransform.isDragging ? 'grabbing' : 'grab';
+    return;
+  }
+  const pos = getPos({ clientX, clientY });
+  const insideDocument = isPointInsideDocument(pos);
+  const viewportRect = viewport.getBoundingClientRect();
+  const localX = clientX - viewportRect.left;
+  const localY = clientY - viewportRect.top;
+  const locked = insideDocument && isLayerEditLocked();
+  const hoveredTextLayer = insideDocument ? findTextLayerAt(pos) : null;
+
+  if((tool === 'brush' || tool === 'eraser') && insideDocument && !locked){
+    const diameter = Math.max(8, Math.round(size * getDisplayTransform().totalScale));
+    cursorPreview.classList.add('visible');
+    cursorPreview.style.width = diameter + 'px';
+    cursorPreview.style.height = diameter + 'px';
+    cursorPreview.style.left = localX + 'px';
+    cursorPreview.style.top = localY + 'px';
+    viewport.style.cursor = 'none';
+    return;
+  }
+
+  cursorPreview.classList.remove('visible');
+  if(locked){
+    viewport.style.cursor = 'not-allowed';
+    return;
+  }
+  if(tool === 'text' && hoveredTextLayer){
+    viewport.style.cursor = 'text';
+    return;
+  }
+  if(tool === 'move' && insideDocument){
+    viewport.style.cursor = 'move';
+    return;
+  }
+  if(tool === 'zoom' && insideDocument){
+    viewport.style.cursor = 'zoom-in';
+    return;
+  }
+  viewport.style.cursor = viewportTransform.isDragging ? 'grabbing' : 'grab';
+}
 
 function resizePreviewCanvas(){
   const nextWidth = Math.max(1, viewport.clientWidth || 1);
@@ -93,9 +342,9 @@ updateViewportAspect();
 // History
 let history = [];
 let historyIndex = -1;
-function pushHistory(){
+function pushHistory(label = 'Edit'){
   // capture state
-  const snapshot = {width, height, layers: [], activeIndex: layers.indexOf(activeLayer)};
+  const snapshot = {width, height, layers: [], activeIndex: layers.indexOf(activeLayer), label};
   for(const l of layers){
     snapshot.layers.push({
       dataURL: l.canvas.toDataURL(),
@@ -184,12 +433,26 @@ function updateHistoryButtons(){
     if(undoBtn) undoBtn.disabled = historyIndex <= 0;
     if(redoBtn) redoBtn.disabled = historyIndex >= history.length-1 || history.length===0;
   }catch(e){}
+  updateCanvasChrome();
 }
 
-function undo(){ if(historyIndex > 0) restoreHistory(historyIndex-1); }
-function redo(){ if(historyIndex < history.length-1) restoreHistory(historyIndex+1); }
+async function undo(){
+  if(historyIndex > 0){
+    const label = history[historyIndex]?.label || 'edit';
+    await restoreHistory(historyIndex-1);
+    addStatus('Undid ' + label + '.', 'info', 1800);
+  }
+}
+async function redo(){
+  if(historyIndex < history.length-1){
+    const label = history[historyIndex + 1]?.label || 'edit';
+    await restoreHistory(historyIndex+1);
+    addStatus('Redid ' + label + '.', 'info', 1800);
+  }
+}
 
-function createLayer(name='Layer'){
+function createLayer(name='Layer', options = {}){
+  const { historyLabel = 'Add Layer', skipHistory = false } = options;
   // ensure new layer canvas matches the largest existing layer or the current view
   let desiredW = width, desiredH = height;
   for(const l of layers){ if(l && l.canvas){ desiredW = Math.max(desiredW, l.canvas.width); desiredH = Math.max(desiredH, l.canvas.height); } }
@@ -210,7 +473,7 @@ function createLayer(name='Layer'){
   const isBackground = name && String(name).toLowerCase().includes('background');
   const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null, locked: isBackground};
   layers.push(layer);
-  pushHistory();
+  if(!skipHistory) pushHistory(historyLabel);
   setActiveLayer(layers.length-1);
   renderLayersUI();
   composite();
@@ -223,16 +486,22 @@ updateHistoryButtons();
 function setActiveLayer(idx){
   activeLayer = layers[idx];
   renderLayersUI();
+  updateCanvasChrome();
 }
 
 function deleteActiveLayer(){
-  if(!activeLayer) return;
+  if(!activeLayer){
+    addStatus('No active layer to remove.', 'warning');
+    return;
+  }
   const idx = layers.indexOf(activeLayer);
   if(idx>=0){
+    const deletedName = activeLayer.name || 'Layer';
     layers.splice(idx,1);
     activeLayer = layers[layers.length-1] || null;
     renderLayersUI(); composite();
-    pushHistory();
+    pushHistory('Delete Layer');
+    addStatus(deletedName + ' deleted. Undo restores it.', 'warning', 3200);
   }
 }
 
@@ -241,41 +510,48 @@ function renderLayersUI(){
   for(let i=layers.length-1;i>=0;i--){
     const layer = layers[i];
     const li = document.createElement('li');
+    li.dataset.layerIndex = String(i);
     const row = document.createElement('div'); row.className = 'layer-row';
+    row.draggable = true;
     const thumb = document.createElement('canvas'); thumb.className = 'layer-thumb'; thumb.width = 56; thumb.height = 42;
     try{ const tctx = thumb.getContext('2d'); tctx.clearRect(0,0,thumb.width,thumb.height); tctx.drawImage(layer.canvas, 0,0, layer.canvas.width, layer.canvas.height, 0,0, thumb.width, thumb.height); }catch(e){}
     const name = document.createElement('div'); name.className='layer-name'; name.textContent=layer.name;
-    name.ondblclick = (ev)=>{ ev.stopPropagation(); const nn = prompt('Rename layer', layer.name); if(nn){ layer.name = nn; renderLayersUI(); pushHistory(); } };
+    name.ondblclick = (ev)=>{ ev.stopPropagation(); const nn = prompt('Rename layer', layer.name); if(nn){ layer.name = nn; renderLayersUI(); pushHistory('Rename Layer'); addStatus('Layer renamed.', 'info', 1800); } };
     const opacity = document.createElement('input'); opacity.type = 'range'; opacity.min = 0; opacity.max = 1; opacity.step = 0.01; opacity.value = layer.opacity; opacity.className = 'layer-opacity';
     const opVal = document.createElement('div'); opVal.className = 'layer-opacity-value'; opVal.textContent = Math.round(layer.opacity*100) + '%';
     opacity.oninput = (e)=>{ layer.opacity = Number(e.target.value); opVal.textContent = Math.round(layer.opacity*100) + '%'; composite(); };
-    opacity.onchange = ()=> pushHistory();
+    opacity.onchange = ()=> pushHistory('Adjust Layer Opacity');
     // prevent clicks on controls from bubbling and re-rendering the layer row (which closes selects)
     opacity.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
     opacity.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
 
     const controls = document.createElement('div'); controls.className='layer-controls';
-    const sel = document.createElement('button'); sel.textContent = (layer===activeLayer)? '●' : '○'; sel.className='small';
-    sel.onclick = ()=> setActiveLayer(i);
-    const vis = document.createElement('button'); vis.textContent = layer.visible? '👁' : '🚫'; vis.className='small';
-    vis.onclick = ()=>{ layer.visible = !layer.visible; composite(); renderLayersUI(); };
-    const up = document.createElement('button'); up.textContent = '↑'; up.className='small'; up.title = 'Move up'; up.onclick = ()=>{ moveLayerUp(i); };
-    const down = document.createElement('button'); down.textContent = '↓'; down.className='small'; down.title = 'Move down'; down.onclick = ()=>{ moveLayerDown(i); };
-
-    [sel, vis, up, down].forEach(b=>{ b.className='small'; b.onclick = (ev)=>{ ev.stopPropagation(); }; });
-    sel.textContent = (layer===activeLayer)? '●' : '○'; sel.onclick = (ev)=>{ ev.stopPropagation(); setActiveLayer(i); };
-    vis.textContent = layer.visible? '👁' : '🚫'; vis.onclick = (ev)=>{ ev.stopPropagation(); layer.visible = !layer.visible; composite(); renderLayersUI(); pushHistory(); };
-    up.title = 'Move up'; up.onclick = (ev)=>{ ev.stopPropagation(); moveLayerUp(i); };
-    down.title = 'Move down'; down.onclick = (ev)=>{ ev.stopPropagation(); moveLayerDown(i); };
-    controls.appendChild(sel);
-    controls.appendChild(vis);
-    controls.appendChild(up);
-    controls.appendChild(down);
+    const dragHandle = document.createElement('button');
+    dragHandle.type = 'button';
+    dragHandle.className = 'layer-icon layer-grip';
+    dragHandle.title = 'Drag to reorder layer';
+    dragHandle.textContent = '::';
+    dragHandle.onclick = (ev)=> ev.stopPropagation();
+    const vis = document.createElement('button');
+    vis.type = 'button';
+    vis.className = 'layer-icon';
+    vis.title = layer.visible ? 'Hide layer' : 'Show layer';
+    vis.textContent = layer.visible ? 'Hide' : 'Show';
+    vis.onclick = (ev)=>{ ev.stopPropagation(); layer.visible = !layer.visible; composite(); renderLayersUI(); pushHistory(layer.visible ? 'Show Layer' : 'Hide Layer'); };
 
     const meta = document.createElement('div'); meta.className = 'layer-meta';
     // Name on top (title style) to avoid layout breaks from long names
     name.style.whiteSpace = 'nowrap'; name.style.overflow = 'hidden'; name.style.textOverflow = 'ellipsis'; name.style.width = '100%';
-    meta.appendChild(name);
+    const headerRow = document.createElement('div');
+    headerRow.className = 'layer-header-row';
+    headerRow.appendChild(name);
+    if(layer === activeLayer){
+      const activeBadge = document.createElement('span');
+      activeBadge.className = 'layer-badge';
+      activeBadge.textContent = 'Active';
+      headerRow.appendChild(activeBadge);
+    }
+    meta.appendChild(headerRow);
 
     const midRow = document.createElement('div'); midRow.className = 'layer-mid-row';
     midRow.appendChild(thumb);
@@ -288,7 +564,7 @@ function renderLayersUI(){
     const blendRow = document.createElement('div'); blendRow.className = 'layer-blend-row';
     const blendLabel = document.createElement('div'); blendLabel.className='prop-title'; blendLabel.textContent='Blend';
     const blendSel = document.createElement('select'); ['source-over','multiply','screen','overlay','darken','lighten'].forEach(b=>{ const o=document.createElement('option'); o.value=b; o.textContent=b; if((layer.blend||'source-over')===b) o.selected=true; blendSel.appendChild(o); });
-    blendSel.onchange = (e)=>{ layer.blend = e.target.value; composite(); pushHistory(); };
+    blendSel.onchange = (e)=>{ layer.blend = e.target.value; composite(); pushHistory('Change Blend Mode'); };
     // prevent the select from bubbling (keeps the dropdown open while interacting)
     blendSel.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
     blendSel.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
@@ -304,20 +580,21 @@ function renderLayersUI(){
 
     // Lock button (left)
     const lockBtn = document.createElement('button');
-    lockBtn.className = 'small lock-btn';
-    lockBtn.textContent = layer.locked ? '🔒 Unlock' : '🔓 Lock';
+    lockBtn.type = 'button';
+    lockBtn.className = 'layer-icon lock-btn';
+    lockBtn.textContent = layer.locked ? 'Unlock' : 'Lock';
     lockBtn.title = layer.locked ? 'Unlock this layer' : 'Lock this layer';
     lockBtn.onclick = (ev) => {
       ev.stopPropagation();
       layer.locked = !layer.locked;
       renderLayersUI();
-      pushHistory();
+      pushHistory(layer.locked ? 'Lock Layer' : 'Unlock Layer');
     };
     leftControls.appendChild(lockBtn);
 
     // Mask button (right)
-    const maskBtn = document.createElement('button'); maskBtn.className='small mask-btn'; maskBtn.textContent = layer.maskCanvas? 'Remove Mask' : 'Add Mask';
-    maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; } renderLayersUI(); composite(); pushHistory(); };
+    const maskBtn = document.createElement('button'); maskBtn.type = 'button'; maskBtn.className='mask-btn'; maskBtn.textContent = layer.maskCanvas? 'Remove Mask' : 'Add Mask';
+    maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; addStatus('Mask removed. Undo restores it.', 'warning', 3200); pushHistory('Remove Mask'); } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; pushHistory('Add Mask'); addStatus('Mask added to ' + layer.name + '.', 'info', 1800); } renderLayersUI(); composite(); };
     rightControls.appendChild(maskBtn);
 
     controlRow.appendChild(leftControls);
@@ -326,15 +603,43 @@ function renderLayersUI(){
 
     row.appendChild(meta);
     row.appendChild(controls);
+    controls.appendChild(vis);
+    controls.appendChild(dragHandle);
 
     // Row selection behavior
     row.classList.add('layer-row');
     if(layer === activeLayer) row.classList.add('active');
     row.style.cursor = 'pointer';
     row.onclick = ()=> { setActiveLayer(i); };
+    row.addEventListener('dragstart', (ev)=>{
+      layerDragIndex = i;
+      li.classList.add('dragging');
+      try{ ev.dataTransfer.setData('text/plain', String(i)); }catch(e){}
+      ev.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragover', (ev)=>{
+      ev.preventDefault();
+      const rect = row.getBoundingClientRect();
+      const placeAfter = ev.clientY >= rect.top + rect.height / 2;
+      clearLayerDragState();
+      li.classList.add(placeAfter ? 'drop-after' : 'drop-before');
+    });
+    row.addEventListener('drop', (ev)=>{
+      ev.preventDefault();
+      const rect = row.getBoundingClientRect();
+      const placeAfter = ev.clientY >= rect.top + rect.height / 2;
+      clearLayerDragState();
+      reorderLayer(layerDragIndex, i, placeAfter);
+      layerDragIndex = null;
+    });
+    row.addEventListener('dragend', ()=>{
+      clearLayerDragState();
+      layerDragIndex = null;
+    });
     li.appendChild(row);
     layersList.appendChild(li);
   }
+  updateCanvasChrome();
 }
 
 function updateLayerThumbnails(){
@@ -488,22 +793,57 @@ function composite(){
         y: Math.round(display.originY + (cy + ry) * display.totalScale)
       };
     });
-    viewCtx.strokeStyle = 'rgba(100,170,255,0.9)'; viewCtx.lineWidth = 1.5; viewCtx.beginPath();
+    viewCtx.strokeStyle = 'rgba(236,239,242,0.82)'; viewCtx.lineWidth = 1.5; viewCtx.beginPath();
     viewCtx.moveTo(corners[0].x, corners[0].y);
     for(let i=1;i<corners.length;i++) viewCtx.lineTo(corners[i].x, corners[i].y);
     viewCtx.closePath(); viewCtx.stroke();
     // draw handles
-    for(const c of corners){ viewCtx.fillStyle='rgba(10,132,255,0.95)'; viewCtx.fillRect(c.x-6,c.y-6,12,12); }
+    for(const c of corners){ viewCtx.fillStyle='rgba(226,232,238,0.95)'; viewCtx.fillRect(c.x-6,c.y-6,12,12); }
     // rotate handle: top center offset
     const topCenter = {x: Math.round((corners[0].x + corners[1].x)/2), y: Math.round((corners[0].y + corners[1].y)/2)};
     const rotHandle = {x: topCenter.x, y: topCenter.y - 30};
-    viewCtx.beginPath(); viewCtx.strokeStyle='rgba(180,200,255,0.9)'; viewCtx.moveTo(topCenter.x, topCenter.y); viewCtx.lineTo(rotHandle.x, rotHandle.y); viewCtx.stroke();
-    viewCtx.fillStyle='rgba(255,200,80,0.95)'; viewCtx.beginPath(); viewCtx.arc(rotHandle.x, rotHandle.y, 6, 0, Math.PI*2); viewCtx.fill();
+    viewCtx.beginPath(); viewCtx.strokeStyle='rgba(210,216,223,0.86)'; viewCtx.moveTo(topCenter.x, topCenter.y); viewCtx.lineTo(rotHandle.x, rotHandle.y); viewCtx.stroke();
+    viewCtx.fillStyle='rgba(196,204,212,0.95)'; viewCtx.beginPath(); viewCtx.arc(rotHandle.x, rotHandle.y, 6, 0, Math.PI*2); viewCtx.fill();
+  }
+  const display = getDisplayTransform();
+  viewCtx.save();
+  viewCtx.strokeStyle = 'rgba(255,255,255,0.18)';
+  viewCtx.lineWidth = 1;
+  viewCtx.shadowColor = 'rgba(0,0,0,0.4)';
+  viewCtx.shadowBlur = 22;
+  viewCtx.strokeRect(
+    Math.round(display.originX) + 0.5,
+    Math.round(display.originY) + 0.5,
+    Math.round(width * display.totalScale),
+    Math.round(height * display.totalScale)
+  );
+  viewCtx.restore();
+  if(currentTextEditor){
+    const textMetrics = measureTextBlock(currentTextEditor.ta.value || ' ', currentTextEditor.pending);
+    const boxX = currentTextEditor.anchor.x;
+    const boxY = currentTextEditor.anchor.y;
+    const boxW = Math.max(32, textMetrics.width);
+    const boxH = Math.max(currentTextEditor.pending.fontSize, textMetrics.lineHeight * textMetrics.lineCount);
+    viewCtx.save();
+    viewCtx.translate(display.originX, display.originY);
+    viewCtx.scale(display.totalScale, display.totalScale);
+    viewCtx.strokeStyle = 'rgba(255,255,255,0.86)';
+    viewCtx.setLineDash([6 / display.totalScale, 4 / display.totalScale]);
+    viewCtx.lineWidth = 1 / display.totalScale;
+    viewCtx.strokeRect(boxX, boxY, boxW, boxH);
+    viewCtx.setLineDash([]);
+    [[boxX, boxY],[boxX + boxW, boxY],[boxX + boxW, boxY + boxH],[boxX, boxY + boxH]].forEach(([handleX, handleY])=>{
+      const hs = 6 / display.totalScale;
+      viewCtx.fillStyle = 'rgba(236,239,242,0.96)';
+      viewCtx.fillRect(handleX - hs / 2, handleY - hs / 2, hs, hs);
+    });
+    viewCtx.restore();
   }
   viewCtx.globalAlpha = 1;
   // update layer thumbnails when the main view changes
   updateLayerThumbnails();
   if(currentTextEditor) syncTextEditorAppearance(currentTextEditor);
+  updateCanvasChrome();
 }
 
 // Drawing
@@ -599,6 +939,7 @@ function syncTextEditorAppearance(editor){
   editor.shell.style.minWidth = editorWidth + 'px';
   editor.shell.style.minHeight = editorHeight + 'px';
   editor.shell.style.borderRadius = Math.max(12, Math.round(14 * uiScale)) + 'px';
+  editor.shell.style.boxShadow = '0 0 0 ' + Math.max(1, Math.round(uiScale)) + 'px rgba(255,255,255,0.14), 0 18px 42px rgba(0,0,0,0.38)';
 
   editor.ta.style.font = getTextFontString(editor.pending, uiScale);
   editor.ta.style.color = editor.pending.color;
@@ -669,6 +1010,7 @@ function openTextEditor(options){
     if(!commitChanges){
       renderToolProps();
       composite();
+      addStatus('Text edit canceled.', 'info', 1600);
       return;
     }
 
@@ -680,7 +1022,8 @@ function openTextEditor(options){
           if(activeLayer === targetLayer) activeLayer = layers[layerIndex] || layers[layerIndex - 1] || null;
           renderLayersUI();
           composite();
-          pushHistory();
+          pushHistory('Delete Text Layer');
+          addStatus('Empty text layer removed. Undo restores it.', 'warning', 2600);
         }
       } else {
         renderLayersUI();
@@ -725,7 +1068,8 @@ function openTextEditor(options){
 
     renderLayersUI();
     composite();
-    pushHistory();
+    pushHistory(targetLayer ? 'Edit Text' : 'Add Text');
+    addStatus(targetLayer ? 'Text updated.' : 'Text layer created.', 'info', 1800);
     renderToolProps();
   }
 
@@ -761,11 +1105,12 @@ view.addEventListener('mousedown', (e)=>{
   if(e.button !== 0) return;
   
   // allow some tools even when there's no active layer (text, crop)
-  if(!activeLayer && !['text','crop'].includes(tool)) return;
+  if(!activeLayer && !['text','crop','zoom'].includes(tool)) return;
   
   // Prevent editing of locked layers for drawing tools
-  if(activeLayer.locked && ['brush', 'eraser', 'fill', 'move', 'transform', 'select', 'magic'].includes(tool)) {
-    alert('Cannot edit a locked layer. Please unlock the layer first.');
+  if(activeLayer && activeLayer.locked && ['brush', 'eraser', 'fill', 'move', 'transform', 'select', 'magic'].includes(tool)) {
+    addStatus('Layer is locked. Unlock it to edit.', 'warning', 2800);
+    updateCursorFeedback(e.clientX, e.clientY);
     return;
   }
   // transform interactive start
@@ -813,6 +1158,15 @@ view.addEventListener('mousedown', (e)=>{
     return;
   }
 
+  if(tool === 'zoom'){
+    const point = getViewPointFromClient(e.clientX, e.clientY);
+    const zoomFactor = e.altKey ? 0.8 : 1.25;
+    zoomViewport(viewportTransform.scale * zoomFactor, point.x, point.y);
+    composite();
+    addStatus(e.altKey ? 'Zoomed out.' : 'Zoomed in.', 'info', 1200);
+    return;
+  }
+
   if(tool==='select'){
     // start selection rect
     const vpRect = viewport.getBoundingClientRect();
@@ -838,7 +1192,7 @@ view.addEventListener('mousedown', (e)=>{
 
   if(tool === 'magic'){
     const pos = getPos(e);
-    if(!activeLayer) { alert('Select a layer to apply Magic Wand mask'); return; }
+    if(!activeLayer) { addStatus('Select a layer before using Magic Wand.', 'warning'); return; }
     // build composite imageData
     const tmpc = document.createElement('canvas'); tmpc.width = width; tmpc.height = height; const tctx2 = tmpc.getContext('2d');
     for(const layer of layers){ if(!layer.visible) continue; tctx2.globalAlpha = layer.opacity; tctx2.drawImage(layer.canvas, layer.offset.x, layer.offset.y); }
@@ -850,7 +1204,8 @@ view.addEventListener('mousedown', (e)=>{
     for(let i=0;i<mask.length;i++){ const a = mask[i]?255:0; const idx = i*4; md.data[idx]=255; md.data[idx+1]=255; md.data[idx+2]=255; md.data[idx+3]=a; }
     mctx.putImageData(md,0,0);
     activeLayer.maskCanvas = mc;
-    pushHistory(); renderLayersUI(); composite();
+    pushHistory('Magic Wand Mask'); renderLayersUI(); composite();
+    addStatus('Mask created from the clicked region.', 'info', 1800);
     return;
   }
 
@@ -883,7 +1238,7 @@ view.addEventListener('mousedown', (e)=>{
       const compImg = tctx.getImageData(0,0,width,height);
       const mask = floodFillMask(compImg, Math.round(pos.x), Math.round(pos.y));
       applyMaskToLayer(mask, width, height, activeLayer, color);
-      pushHistory(); renderLayersUI(); composite();
+      pushHistory('Composite Fill'); renderLayersUI(); composite();
     } else {
       // compute mask on the active layer only
       const lx = Math.round(pos.x - activeLayer.offset.x); const ly = Math.round(pos.y - activeLayer.offset.y);
@@ -891,8 +1246,9 @@ view.addEventListener('mousedown', (e)=>{
       const img = activeLayer.ctx.getImageData(0,0,activeLayer.canvas.width, activeLayer.canvas.height);
       const mask = floodFillMask(img, lx, ly);
       applyMaskToLayer(mask, activeLayer.canvas.width, activeLayer.canvas.height, activeLayer, color);
-      pushHistory(); renderLayersUI(); composite();
+      pushHistory('Fill Layer'); renderLayersUI(); composite();
     }
+    addStatus('Fill applied.', 'info', 1600);
     return;
   }
 
@@ -924,6 +1280,7 @@ view.addEventListener('mousedown', (e)=>{
 });
 
 view.addEventListener('mousemove', (e)=>{
+  updateCursorFeedback(e.clientX, e.clientY);
   const pos = getPos(e);
   // handle transform dragging
   if(transformState && transformState.dragging){
@@ -986,6 +1343,8 @@ view.addEventListener('mousemove', (e)=>{
   last = pos;
 });
 
+view.addEventListener('mouseleave', ()=> updateCursorFeedback());
+
 window.addEventListener('mouseup', ()=>{
   // handle transform mouseup
   if(transformState && transformState.dragging){
@@ -1011,7 +1370,8 @@ window.addEventListener('mouseup', ()=>{
         layers.push(newLayer);
         activeLayer = newLayer;
         renderLayersUI(); composite();
-        pushHistory();
+        pushHistory('Lift Selection To Layer');
+        addStatus('Selection moved into a new layer. Undo restores the original pixels.', 'info', 2600);
       }
     }
     selection = null; return;
@@ -1038,7 +1398,7 @@ window.addEventListener('mouseup', ()=>{
     const ctx = isEditingMask ? activeLayer.maskCanvas.getContext('2d') : activeLayer.ctx;
     ctx.restore();
   }catch(e){}
-  pushHistory();
+  pushHistory(tool === 'brush' ? 'Brush Stroke' : 'Erase Stroke');
 });
 
 // UI bindings
@@ -1047,6 +1407,7 @@ document.getElementById('tool-eraser').addEventListener('click', ()=> selectTool
 document.getElementById('tool-move').addEventListener('click', ()=> selectTool('move'));
 document.getElementById('tool-select').addEventListener('click', ()=> selectTool('select'));
 document.getElementById('tool-transform').addEventListener('click', ()=> doTransform());
+document.getElementById('tool-zoom')?.addEventListener('click', ()=> selectTool('zoom'));
 document.getElementById('tool-text')?.addEventListener('click', ()=> selectTool('text'));
 document.getElementById('tool-fill')?.addEventListener('click', ()=> selectTool('fill'));
 document.getElementById('tool-crop')?.addEventListener('click', ()=> selectTool('crop'));
@@ -1067,6 +1428,7 @@ function selectTool(t){
   if(btn) btn.classList.add('active');
   // render per-tool properties
   setTimeout(()=>{ try{ renderToolProps(); }catch(e){} }, 0);
+  updateCanvasChrome();
 }
 
 // renderToolProps placeholder - will be defined later in file
@@ -1176,6 +1538,12 @@ function renderToolProps(){
       const cancelBtn = document.createElement('button'); cancelBtn.textContent = 'Cancel (Esc)'; cancelBtn.onclick = ()=>{ currentTextEditor.cancel(); };
       row.appendChild(commitBtn); row.appendChild(cancelBtn); el.appendChild(row);
     }
+  } else if(tool === 'zoom'){
+    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Zoom tool: click to zoom in, Alt+click to zoom out, or use Fit / 100% in the toolbar.'; el.appendChild(help);
+    const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
+    const fitBtn = document.createElement('button'); fitBtn.textContent = 'Fit View'; fitBtn.onclick = ()=> fitView(true);
+    const actualBtn = document.createElement('button'); actualBtn.textContent = '100%'; actualBtn.onclick = ()=> setActualSize(true);
+    row.appendChild(fitBtn); row.appendChild(actualBtn); el.appendChild(row);
   } else if(tool === 'crop'){
     const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Click and drag to select crop area. Release to preview, then Commit or Cancel.'; el.appendChild(help);
     if(cropPending){
@@ -1374,10 +1742,8 @@ document.getElementById('zoom-out')?.addEventListener('click', () => {
   composite();
 });
 
-document.getElementById('reset-zoom')?.addEventListener('click', () => {
-  resetViewportTransform();
-  composite();
-});
+document.getElementById('zoom-fit')?.addEventListener('click', ()=> fitView(true));
+document.getElementById('zoom-100')?.addEventListener('click', ()=> setActualSize(true));
 
 // Resize modal event listeners
 document.getElementById('close-resize-modal').addEventListener('click', closeResizeModal);
@@ -1445,7 +1811,7 @@ function confirmResize() {
   const newHeight = parseInt(heightInput.value);
   
   if (isNaN(newWidth) || isNaN(newHeight) || newWidth <= 0 || newHeight <= 0) {
-    alert('Please enter valid dimensions.');
+    addStatus('Please enter valid canvas dimensions.', 'warning');
     return;
   }
   
@@ -1489,7 +1855,8 @@ function confirmResize() {
   }
   
   composite();
-  pushHistory();
+  pushHistory('Resize Canvas');
+  addStatus('Canvas resized. Undo restores the previous size.', 'warning', 3200);
   
   // Update UI display for canvas size
   try{ updateCanvasSizeDisplay(); }catch(e){}
@@ -1534,7 +1901,7 @@ function handleFile(e){
     }
 
     // Create imported layer and draw the image. If we resized canvas to image dimensions, draw at native size.
-    createLayer('Imported');
+    createLayer('Imported', { skipHistory: true });
     const l = activeLayer;
     if(resizeToImage){
       try{ l.ctx.drawImage(img, 0, 0); } catch(e) { /* ignore */ }
@@ -1550,7 +1917,8 @@ function handleFile(e){
       try { l.ctx.drawImage(img, 0, 0, imgW, imgH, dx, dy, drawW, drawH); } catch(e) { /* ignore */ }
     }
     composite();
-    pushHistory();
+    pushHistory('Import Image');
+    addStatus('Image imported.', 'info', 1800);
   };
   img.src = URL.createObjectURL(f);
 }
@@ -1563,7 +1931,10 @@ function exportPNG(){
 
 // Transform: simple scale/rotate of active layer via prompt
 function doTransform(){
-  if(!activeLayer) return alert('Select a layer to transform');
+  if(!activeLayer){
+    addStatus('Select a layer before transforming.', 'warning');
+    return;
+  }
   // commit any active text edits before entering transform
   if(currentTextEditor){ try{ currentTextEditor.commit(); }catch(err){ currentTextEditor = null; } }
   // enter interactive transform mode
@@ -1613,7 +1984,7 @@ function transformKeyHandler(e){
 }
 
 function cancelTransform(){
-  transformState = null; window.removeEventListener('keydown', transformKeyHandler); composite(); renderToolProps();
+  transformState = null; window.removeEventListener('keydown', transformKeyHandler); composite(); renderToolProps(); addStatus('Transform canceled.', 'info', 1600);
 }
 
 function commitTransform(){
@@ -1710,7 +2081,7 @@ function commitTransform(){
   // replace layer canvas with out
   l.canvas = out; l.ctx = out.getContext('2d');
   transformState = null; window.removeEventListener('keydown', transformKeyHandler);
-  pushHistory(); renderLayersUI(); composite(); renderToolProps();
+  pushHistory('Transform Layer'); renderLayersUI(); composite(); renderToolProps(); addStatus('Transform applied.', 'info', 1800);
 }
 
 // Crop commit/cancel helpers
@@ -1749,14 +2120,15 @@ function commitCrop(){
     width = sw; height = sh; try{ updateViewportAspect(); }catch(e){}
     try{ updateCanvasSizeDisplay(); }catch(e){}
     resetViewportTransform();
-    renderLayersUI(); composite(); pushHistory();
+    renderLayersUI(); composite(); pushHistory('Crop Canvas');
+    addStatus('Canvas cropped. Undo restores the previous framing.', 'warning', 3200);
   }
   selection = null; cropPending = false; renderToolProps();
 }
 
 function cancelCrop(){
   const selDiv = document.getElementById('sel-rect'); if(selDiv) selDiv.remove();
-  selection = null; cropPending = false; renderToolProps();
+  selection = null; cropPending = false; renderToolProps(); addStatus('Crop canceled.', 'info', 1600);
 }
 
 // Zoom and drag functionality
@@ -1787,7 +2159,7 @@ function setupViewportControls() {
   window.addEventListener('mouseup', (e) => {
     if (viewportTransform.isDragging) {
       viewportTransform.isDragging = false;
-      viewport.style.cursor = '';
+      updateCursorFeedback(e.clientX, e.clientY);
     }
   });
 
@@ -1799,32 +2171,43 @@ function setupViewportControls() {
     zoomViewport(viewportTransform.scale * zoomFactor, point.x, point.y);
     composite();
   });
-
-  // Reset view button
-  const resetViewBtn = document.createElement('button');
-  resetViewBtn.textContent = 'Reset View';
-  resetViewBtn.style.position = 'absolute';
-  resetViewBtn.style.bottom = '10px';
-  resetViewBtn.style.right = '10px';
-  resetViewBtn.style.zIndex = '100';
-  resetViewBtn.style.padding = '8px 12px';
-  resetViewBtn.style.background = 'rgba(255,255,255,0.1)';
-  resetViewBtn.style.color = 'white';
-  resetViewBtn.style.border = '1px solid rgba(255,255,255,0.2)';
-  resetViewBtn.style.borderRadius = '6px';
-  resetViewBtn.style.cursor = 'pointer';
-  resetViewBtn.addEventListener('click', () => {
-    resetViewportTransform();
-    composite();
-  });
-  viewport.appendChild(resetViewBtn);
 }
 
+window.addEventListener('keydown', (e)=>{
+  const activeTag = document.activeElement?.tagName;
+  const editingField = !!document.activeElement && (document.activeElement.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag));
+  if((e.ctrlKey || e.metaKey) && e.key === '0'){
+    e.preventDefault();
+    fitView(true);
+    return;
+  }
+  if((e.ctrlKey || e.metaKey) && !editingField){
+    const key = e.key.toLowerCase();
+    if(key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); return; }
+    if((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); return; }
+  }
+  if(editingField) return;
+  const key = e.key.toLowerCase();
+  if(key === 'v'){ selectTool('move'); }
+  else if(key === 'b'){ selectTool('brush'); }
+  else if(key === 'e'){ selectTool('eraser'); }
+  else if(key === 't'){ selectTool('text'); }
+  else if(key === 'z'){ selectTool('zoom'); }
+  else if(key === 'escape' && cropPending){ cancelCrop(); }
+});
+
 // Init default - only create Background layer
-createLayer('Background');
+createLayer('Background', { historyLabel: 'Create Background' });
 setupViewportControls();
 window.addEventListener('resize', () => { resizePreviewCanvas(); composite(); });
 resizePreviewCanvas();
 composite();
 renderToolProps();
 updateCanvasSizeDisplay();
+applyTooltips();
+updateCanvasChrome();
+window.requestAnimationFrame(()=>{
+  resizePreviewCanvas();
+  composite();
+  updateCanvasChrome();
+});

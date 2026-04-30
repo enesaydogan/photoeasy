@@ -19,9 +19,13 @@
       </label>
       <button id="export">Export PNG</button>
       <button id="resize-canvas">Resize Canvas</button>
-      <button id="zoom-in">Zoom In</button>
-      <button id="zoom-out">Zoom Out</button>
-      <button id="reset-zoom">Reset Zoom</button>
+      <div class="zoom-controls" aria-label="Zoom controls">
+        <button id="zoom-fit">Fit</button>
+        <button id="zoom-100">100%</button>
+        <button id="zoom-out">-</button>
+        <div id="zoom-readout" class="zoom-readout" aria-live="polite">100%</div>
+        <button id="zoom-in">+</button>
+      </div>
     </div>
     <div class="tool-header-controls">
       <!-- moved to tool properties panel -->
@@ -60,6 +64,9 @@
       <button id="tool-transform" class="tool" title="Transform" aria-label="Transform">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7h18v10H3z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 7v-3M17 7v-3M12 7v-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="7" cy="17" r="1" fill="currentColor"/><circle cx="12" cy="17" r="1" fill="currentColor"/><circle cx="17" cy="17" r="1" fill="currentColor"/></svg>
       </button>
+      <button id="tool-zoom" class="tool" title="Zoom" aria-label="Zoom">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M20 20l-4.2-4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M11 8v6M8 11h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
       <button id="tool-text" class="tool" title="Text" aria-label="Text">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6h16M8 18h8M12 6v12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -68,25 +75,38 @@
 
     <section class="canvas-area">
       <div id="viewport" class="viewport">
+        <div id="canvas-onboarding" class="canvas-onboarding" aria-live="polite">
+          <strong>Import an image or add a layer to start.</strong>
+          <span>The editor is empty right now, so nothing is broken.</span>
+        </div>
         <div id="viewport-inner" class="viewport-inner">
           <canvas id="view"></canvas>
+        </div>
+        <div id="canvas-hud" class="canvas-hud">
+          <div id="tool-hint" class="tool-hint" aria-live="polite"></div>
+          <div class="canvas-status-row">
+            <div id="history-label" class="history-label" aria-live="polite"></div>
+            <div id="status-stack" class="status-stack" aria-live="polite" aria-atomic="true"></div>
+          </div>
         </div>
       </div>
     </section>
 
-    <aside class="layers">
-      <div id="tool-props" class="tool-props" aria-live="polite">
+    <aside id="sidebar" class="layers sidebar tool-primary">
+      <div id="tool-props" class="tool-props sidebar-panel" aria-live="polite">
         <div class="tool-props-title">Tool Properties</div>
         <div id="tool-props-content" class="tool-props-content"></div>
       </div>
-      <div class="layers-header">
-        <div class="layers-title">Layers</div>
-        <div class="layers-header-top">
+      <div id="layers-panel" class="layers-panel sidebar-panel">
+        <div class="layers-header">
+          <div class="layers-title">Layers</div>
+          <div class="layers-header-top">
           <button id="add-layer">Add Layer</button>
           <button id="del-layer">Remove Layer</button>
+          </div>
         </div>
+        <ul id="layers-list"></ul>
       </div>
-      <ul id="layers-list"></ul>
     </aside>
   </main>
 
