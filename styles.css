@@ -108,8 +108,8 @@ input,select,textarea{accent-color:#737b84}
 #layers-list li.drop-before .layer-row{box-shadow:inset 0 2px 0 rgba(255,255,255,0.32)}
 #layers-list li.drop-after .layer-row{box-shadow:inset 0 -2px 0 rgba(255,255,255,0.32)}
 .layers-header{font-weight:700;margin-bottom:10px;color:var(--text-1)}
-.layers-header-top{display:flex;gap:8px;margin-bottom:8px}
-.layers-header-top button{flex:1;padding:8px;border-radius:10px}
+.layers-header-top{display:grid;grid-template-columns:repeat(3, minmax(0,1fr));gap:8px;margin-bottom:8px}
+.layers-header-top button{width:100%;min-width:0;padding:8px;border-radius:10px}
 .layers-title{text-align:left;font-weight:800;margin-bottom:6px;color:var(--text-1)}
 .layer-thumb{width:56px;height:42px;border-radius:6px;margin-right:10px;object-fit:cover;box-shadow:0 2px 8px rgba(2,6,23,0.6)}
 .layer-meta{display:flex;flex-direction:column;gap:8px;flex:1;min-width:0}

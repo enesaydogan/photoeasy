@@ -293,6 +293,7 @@ function applyTooltips(){
     'zoom-100': { label: 'Actual Size', shortcut: null },
     'zoom-in': { label: 'Zoom In', shortcut: null },
     'zoom-out': { label: 'Zoom Out', shortcut: null },
+    'dup-layer': { label: 'Duplicate Layer', shortcut: 'Ctrl+J' },
     undo: { label: 'Undo', shortcut: 'Ctrl+Z' },
     redo: { label: 'Redo', shortcut: 'Ctrl+Shift+Z' }
   };
@@ -572,6 +573,61 @@ function createLayer(name='Layer', options = {}){
   setActiveLayer(layers.length-1);
   renderLayersUI();
   composite();
+}
+
+function cloneCanvas(sourceCanvas){
+  const clone = document.createElement('canvas');
+  clone.width = sourceCanvas.width;
+  clone.height = sourceCanvas.height;
+  const cloneCtx = clone.getContext('2d');
+  cloneCtx.drawImage(sourceCanvas, 0, 0);
+  return clone;
+}
+
+function getDuplicateLayerName(baseName){
+  const sanitizedBase = (baseName || 'Layer').trim() || 'Layer';
+  const existingNames = new Set(layers.map((layer)=> layer.name));
+  let candidate = sanitizedBase + ' copy';
+  let copyIndex = 2;
+  while(existingNames.has(candidate)){
+    candidate = sanitizedBase + ' copy ' + copyIndex;
+    copyIndex += 1;
+  }
+  return candidate;
+}
+
+function duplicateActiveLayer(){
+  if(!activeLayer){
+    addStatus('No active layer to duplicate.', 'warning');
+    return;
+  }
+  const sourceIndex = layers.indexOf(activeLayer);
+  if(sourceIndex < 0) return;
+  const clonedCanvas = cloneCanvas(activeLayer.canvas);
+  const duplicateLayer = {
+    canvas: clonedCanvas,
+    ctx: clonedCanvas.getContext('2d'),
+    name: getDuplicateLayerName(activeLayer.name),
+    offset: { ...activeLayer.offset },
+    visible: activeLayer.visible,
+    opacity: activeLayer.opacity,
+    blend: activeLayer.blend || 'source-over',
+    maskCanvas: activeLayer.maskCanvas ? cloneCanvas(activeLayer.maskCanvas) : null,
+    locked: !!activeLayer.locked,
+    type: activeLayer.type || null,
+    text: activeLayer.text || null,
+    font: activeLayer.font || null,
+    color: activeLayer.color || null,
+    fontSize: activeLayer.fontSize || null,
+    fontFamily: activeLayer.fontFamily || null,
+    bold: !!activeLayer.bold
+  };
+  layers.splice(sourceIndex + 1, 0, duplicateLayer);
+  activeLayer = duplicateLayer;
+  renderLayersUI();
+  composite();
+  pushHistory('Duplicate Layer');
+  addStatus(duplicateLayer.name + ' created. Undo restores the previous layer stack.', 'info', 2400);
 }
 
 // ensure there's an initial history snapshot representing the empty document
@@ -1856,6 +1912,7 @@ function getLayerContentBounds(layer){
 }
 
 document.getElementById('add-layer').addEventListener('click', ()=> createLayer('Layer ' + (layers.length+1)));
+document.getElementById('dup-layer').addEventListener('click', ()=> duplicateActiveLayer());
 document.getElementById('del-layer').addEventListener('click', ()=> deleteActiveLayer());
 document.getElementById('export').addEventListener('click', exportPNG);
 document.getElementById('import-image').addEventListener('click', ()=> fileInput.click());
@@ -2319,6 +2376,7 @@ window.addEventListener('keydown', (e)=>{
     const key = e.key.toLowerCase();
     if(key === 'z' && !e.shiftKey){ e.preventDefault(); undo(); return; }
     if((key === 'z' && e.shiftKey) || key === 'y'){ e.preventDefault(); redo(); return; }
+    if(key === 'j'){ e.preventDefault(); duplicateActiveLayer(); return; }
   }
   if(editingField) return;
   const key = e.key.toLowerCase();
