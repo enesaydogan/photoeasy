@@ -59,6 +59,7 @@ let viewportTransform = { scale: 1, offsetX: 0, offsetY: 0, isDragging: false, s
 let layerDragIndex = null;
 let renamingLayerIndex = null;
 let renamingLayerDraft = '';
+let moveInteraction = null;
 
 const cursorPreview = document.createElement('div');
 cursorPreview.className = 'cursor-preview';
@@ -388,6 +389,26 @@ function updateCursorFeedback(clientX, clientY){
   viewport.style.cursor = viewportTransform.isDragging ? 'grabbing' : 'grab';
 }
 
+function findLayerAt(pos){
+  for(let index = layers.length - 1; index >= 0; index--){
+    const layer = layers[index];
+    if(!layer || !layer.visible) continue;
+    const localX = Math.round(pos.x - layer.offset.x);
+    const localY = Math.round(pos.y - layer.offset.y);
+    if(localX < 0 || localY < 0 || localX >= layer.canvas.width || localY >= layer.canvas.height) continue;
+    if(layer.maskCanvas){
+      const maskX = Math.round(pos.x);
+      const maskY = Math.round(pos.y);
+      if(maskX < 0 || maskY < 0 || maskX >= layer.maskCanvas.width || maskY >= layer.maskCanvas.height) continue;
+      const maskAlpha = layer.maskCanvas.getContext('2d').getImageData(maskX, maskY, 1, 1).data[3];
+      if(maskAlpha === 0) continue;
+    }
+    const pixelAlpha = layer.ctx.getImageData(localX, localY, 1, 1).data[3];
+    if(pixelAlpha !== 0) return layer;
+  }
+  return null;
+}
+
 function resizePreviewCanvas(){
   const nextWidth = Math.max(1, viewport.clientWidth || 1);
   const nextHeight = Math.max(1, viewport.clientHeight || 1);
@@ -596,38 +617,44 @@ function getDuplicateLayerName(baseName){
   return candidate;
 }
 
-function duplicateActiveLayer(){
-  if(!activeLayer){
+function duplicateLayer(sourceLayer = activeLayer, options = {}){
+  const { activate = true, skipHistory = false, historyLabel = 'Duplicate Layer', showToast = true } = options;
+  if(!sourceLayer){
     addStatus('No active layer to duplicate.', 'warning');
-    return;
+    return null;
   }
-  const sourceIndex = layers.indexOf(activeLayer);
-  if(sourceIndex < 0) return;
-  const clonedCanvas = cloneCanvas(activeLayer.canvas);
+  const sourceIndex = layers.indexOf(sourceLayer);
+  if(sourceIndex < 0) return null;
+  const clonedCanvas = cloneCanvas(sourceLayer.canvas);
   const duplicateLayer = {
     canvas: clonedCanvas,
     ctx: clonedCanvas.getContext('2d'),
-    name: getDuplicateLayerName(activeLayer.name),
-    offset: { ...activeLayer.offset },
-    visible: activeLayer.visible,
-    opacity: activeLayer.opacity,
-    blend: activeLayer.blend || 'source-over',
-    maskCanvas: activeLayer.maskCanvas ? cloneCanvas(activeLayer.maskCanvas) : null,
-    locked: !!activeLayer.locked,
-    type: activeLayer.type || null,
-    text: activeLayer.text || null,
-    font: activeLayer.font || null,
-    color: activeLayer.color || null,
-    fontSize: activeLayer.fontSize || null,
-    fontFamily: activeLayer.fontFamily || null,
-    bold: !!activeLayer.bold
+    name: getDuplicateLayerName(sourceLayer.name),
+    offset: { ...sourceLayer.offset },
+    visible: sourceLayer.visible,
+    opacity: sourceLayer.opacity,
+    blend: sourceLayer.blend || 'source-over',
+    maskCanvas: sourceLayer.maskCanvas ? cloneCanvas(sourceLayer.maskCanvas) : null,
+    locked: !!sourceLayer.locked,
+    type: sourceLayer.type || null,
+    text: sourceLayer.text || null,
+    font: sourceLayer.font || null,
+    color: sourceLayer.color || null,
+    fontSize: sourceLayer.fontSize || null,
+    fontFamily: sourceLayer.fontFamily || null,
+    bold: !!sourceLayer.bold
   };
   layers.splice(sourceIndex + 1, 0, duplicateLayer);
-  activeLayer = duplicateLayer;
+  if(activate) activeLayer = duplicateLayer;
   renderLayersUI();
   composite();
-  pushHistory('Duplicate Layer');
-  addStatus(duplicateLayer.name + ' created. Undo restores the previous layer stack.', 'info', 2400);
+  if(!skipHistory) pushHistory(historyLabel);
+  if(showToast) addStatus(duplicateLayer.name + ' created. Undo restores the previous layer stack.', 'info', 2400);
+  return duplicateLayer;
+}
+
+function duplicateActiveLayer(){
+  return duplicateLayer(activeLayer);
 }
 
 // ensure there's an initial history snapshot representing the empty document
@@ -1295,10 +1322,10 @@ view.addEventListener('mousedown', (e)=>{
   if(e.button !== 0) return;
   
   // allow some tools even when there's no active layer (text, crop)
-  if(!activeLayer && !['text','crop','zoom'].includes(tool)) return;
+  if(!activeLayer && !['text','crop','zoom','move'].includes(tool)) return;
   
   // Prevent editing of locked layers for drawing tools
-  if(activeLayer && activeLayer.locked && ['brush', 'eraser', 'fill', 'move', 'transform', 'select', 'magic'].includes(tool)) {
+  if(activeLayer && activeLayer.locked && ['brush', 'eraser', 'fill', 'transform', 'select', 'magic'].includes(tool)) {
     addStatus('Layer is locked. Unlock it to edit.', 'warning', 2800);
     updateCursorFeedback(e.clientX, e.clientY);
     return;
@@ -1344,7 +1371,33 @@ view.addEventListener('mousedown', (e)=>{
     return;
   }
   if(tool==='move'){
-    drawing = true; last = getPos(e);
+    const pos = getPos(e);
+    const clickedLayer = findLayerAt(pos);
+    if(clickedLayer){
+      const layerIndex = layers.indexOf(clickedLayer);
+      if(layerIndex >= 0 && clickedLayer !== activeLayer) setActiveLayer(layerIndex);
+      if(clickedLayer.locked){
+        addStatus('Layer is locked. Unlock it to move.', 'warning', 2800);
+        updateCursorFeedback(e.clientX, e.clientY);
+        return;
+      }
+      if(e.ctrlKey || e.metaKey){
+        const duplicatedLayer = duplicateLayer(clickedLayer, { skipHistory: true, showToast: false, activate: true });
+        if(!duplicatedLayer) return;
+        moveInteraction = { duplicated: true, moved: false, sourceName: duplicatedLayer.name };
+      } else {
+        moveInteraction = { duplicated: false, moved: false, sourceName: clickedLayer.name };
+      }
+    } else {
+      if(!activeLayer) return;
+      if(activeLayer.locked){
+        addStatus('Layer is locked. Unlock it to move.', 'warning', 2800);
+        updateCursorFeedback(e.clientX, e.clientY);
+        return;
+      }
+      moveInteraction = { duplicated: false, moved: false, sourceName: activeLayer.name };
+    }
+    drawing = true; last = pos;
     return;
   }
 
@@ -1521,6 +1574,7 @@ view.addEventListener('mousemove', (e)=>{
   if(tool==='move'){
     const dx = pos.x - last.x; const dy = pos.y - last.y;
     activeLayer.offset.x += dx; activeLayer.offset.y += dy;
+    if(moveInteraction && (dx !== 0 || dy !== 0)) moveInteraction.moved = true;
     last = pos; composite(); return;
   }
   
@@ -1588,6 +1642,21 @@ window.addEventListener('mouseup', ()=>{
     const ctx = isEditingMask ? activeLayer.maskCanvas.getContext('2d') : activeLayer.ctx;
     ctx.restore();
   }catch(e){}
+  if(tool === 'move'){
+    if(moveInteraction){
+      if(moveInteraction.duplicated && moveInteraction.moved){
+        pushHistory('Duplicate And Move Layer');
+        addStatus(moveInteraction.sourceName + ' duplicated and moved.', 'info', 2200);
+      } else if(moveInteraction.duplicated){
+        pushHistory('Duplicate Layer');
+        addStatus(moveInteraction.sourceName + ' created. Undo restores the previous layer stack.', 'info', 2400);
+      } else if(moveInteraction.moved){
+        pushHistory('Move Layer');
+      }
+    }
+    moveInteraction = null;
+    return;
+  }
   pushHistory(tool === 'brush' ? 'Brush Stroke' : 'Erase Stroke');
 });
 

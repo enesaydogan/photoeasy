@@ -101,8 +101,8 @@ input,select,textarea{accent-color:#737b84}
 .cp-recent{display:flex;gap:6px;flex-wrap:wrap}
 .cp-recent .sw{width:20px;height:20px;border-radius:3px;border:1px solid #bbb}
 .layers{width:320px;border:1px solid var(--border-soft);background:var(--panel-bg);padding:12px;border-radius:14px;box-shadow:var(--shadow-1)}
-.layers-panel{display:flex;flex-direction:column;min-height:0;flex:1;padding:12px;border-radius:14px;border:1px solid var(--border-soft);background:linear-gradient(180deg,#171b20,#12161a);box-shadow:var(--shadow-1)}
-#layers-list{list-style:none;padding:0;margin:0}
+.layers-panel{display:flex;flex-direction:column;min-height:0;flex:1;padding:12px;border-radius:14px;border:1px solid var(--border-soft);background:linear-gradient(180deg,#171b20,#12161a);box-shadow:var(--shadow-1);overflow:hidden}
+#layers-list{list-style:none;padding:0 4px 0 0;margin:0;flex:1;min-height:0;overflow:auto}
 #layers-list li{padding:0;margin-bottom:10px;background:transparent;border:none;display:block}
 #layers-list li.dragging{opacity:.45}
 #layers-list li.drop-before .layer-row{box-shadow:inset 0 2px 0 rgba(255,255,255,0.32)}
