@@ -503,6 +503,7 @@ function composite(){
   viewCtx.globalAlpha = 1;
   // update layer thumbnails when the main view changes
   updateLayerThumbnails();
+  if(currentTextEditor) syncTextEditorAppearance(currentTextEditor);
 }
 
 // Drawing
@@ -554,6 +555,204 @@ function createTextCanvas(text, fontString, fillColor, textSize){
     ctx.fillText(line, 0, index * lineHeight);
   });
   return canvas;
+}
+
+const TEXT_HIT_PADDING = 10;
+
+function getTextFontString(fontOptions, scale = 1){
+  return (fontOptions.bold ? 'bold ' : '') + Math.max(1, Math.round(fontOptions.fontSize * scale)) + 'px ' + fontOptions.fontFamily;
+}
+
+function measureTextBlock(text, fontOptions, scale = 1){
+  const normalizedText = (text || '').replace(/\r\n/g, '\n');
+  const lines = normalizedText.split('\n');
+  const measureCanvas = document.createElement('canvas');
+  const measureCtx = measureCanvas.getContext('2d');
+  measureCtx.font = getTextFontString(fontOptions, scale);
+  const lineHeight = Math.max(1, Math.ceil(fontOptions.fontSize * scale * 1.2));
+  const width = lines.reduce((maxWidth, line) => {
+    const sample = line.length ? line : ' ';
+    return Math.max(maxWidth, Math.ceil(measureCtx.measureText(sample).width));
+  }, 1);
+  return { width, lineHeight, lineCount: Math.max(1, lines.length) };
+}
+
+function removeTextEditor(editor){
+  if(!editor) return;
+  try{ if(editor.shell && editor.shell.parentNode) editor.shell.parentNode.removeChild(editor.shell); }catch(e){}
+}
+
+function syncTextEditorAppearance(editor){
+  if(!editor || !editor.ta || !editor.shell) return;
+  const display = getDisplayTransform();
+  const pagePos = canvasToPagePosition(editor.anchor.x, editor.anchor.y);
+  const uiScale = Math.max(1, display.totalScale);
+  const paddingX = Math.max(12, Math.round(14 * uiScale));
+  const paddingY = Math.max(10, Math.round(12 * uiScale));
+  const metrics = measureTextBlock(editor.ta.value, editor.pending, uiScale);
+  const editorWidth = Math.max(Math.round(180 * uiScale), metrics.width + paddingX * 2);
+  const editorHeight = Math.max(Math.round(52 * uiScale), metrics.lineHeight * metrics.lineCount + paddingY * 2 + Math.round(24 * uiScale));
+
+  editor.shell.style.left = pagePos.left + 'px';
+  editor.shell.style.top = pagePos.top + 'px';
+  editor.shell.style.padding = paddingY + 'px ' + paddingX + 'px ' + Math.max(8, Math.round(10 * uiScale)) + 'px';
+  editor.shell.style.minWidth = editorWidth + 'px';
+  editor.shell.style.minHeight = editorHeight + 'px';
+  editor.shell.style.borderRadius = Math.max(12, Math.round(14 * uiScale)) + 'px';
+
+  editor.ta.style.font = getTextFontString(editor.pending, uiScale);
+  editor.ta.style.color = editor.pending.color;
+  editor.ta.style.width = (editorWidth - paddingX * 2) + 'px';
+  editor.ta.style.height = Math.max(Math.round(36 * uiScale), metrics.lineHeight * metrics.lineCount + Math.round(8 * uiScale)) + 'px';
+  editor.ta.style.lineHeight = (metrics.lineHeight / Math.max(1, Math.round(editor.pending.fontSize * uiScale))) + '';
+
+  if(editor.meta){
+    editor.meta.style.fontSize = Math.max(10, Math.round(11 * uiScale)) + 'px';
+  }
+}
+
+function findTextLayerAt(pos){
+  for(let index = layers.length - 1; index >= 0; index--){
+    const layer = layers[index];
+    if(!layer || layer.type !== 'text' || !layer.visible) continue;
+    const localX = pos.x - layer.offset.x;
+    const localY = pos.y - layer.offset.y;
+    if(localX < -TEXT_HIT_PADDING || localY < -TEXT_HIT_PADDING || localX > layer.canvas.width + TEXT_HIT_PADDING || localY > layer.canvas.height + TEXT_HIT_PADDING) continue;
+    return layer;
+  }
+  return null;
+}
+
+function openTextEditor(options){
+  const { layer = null, position = null } = options;
+  const anchor = layer ? { x: layer.offset.x, y: layer.offset.y } : { x: Math.round(position.x), y: Math.round(position.y) };
+  const pending = {
+    color: layer?.color || color,
+    fontSize: layer?.fontSize || fontSize,
+    fontFamily: layer?.fontFamily || fontFamily,
+    bold: !!(layer ? layer.bold : fontBold)
+  };
+
+  const shell = document.createElement('div');
+  shell.className = 'text-editor-shell';
+
+  const ta = document.createElement('textarea');
+  ta.className = 'text-editor-input';
+  ta.spellcheck = false;
+  ta.value = layer?.text || '';
+
+  const meta = document.createElement('div');
+  meta.className = 'text-editor-meta';
+  meta.textContent = 'Ctrl+Enter to commit  •  Esc to cancel';
+
+  shell.appendChild(ta);
+  shell.appendChild(meta);
+  document.body.appendChild(shell);
+
+  const editorState = {
+    shell,
+    ta,
+    meta,
+    layer,
+    anchor,
+    pending,
+    commit: null,
+    cancel: null
+  };
+
+  function finalizeEditor(commitChanges){
+    const textValue = ta.value.replace(/\r\n/g, '\n');
+    const targetLayer = editorState.layer;
+    removeTextEditor(editorState);
+    currentTextEditor = null;
+
+    if(!commitChanges){
+      renderToolProps();
+      composite();
+      return;
+    }
+
+    if(!textValue.trim()){
+      if(targetLayer){
+        const layerIndex = layers.indexOf(targetLayer);
+        if(layerIndex >= 0){
+          layers.splice(layerIndex, 1);
+          if(activeLayer === targetLayer) activeLayer = layers[layerIndex] || layers[layerIndex - 1] || null;
+          renderLayersUI();
+          composite();
+          pushHistory();
+        }
+      } else {
+        renderLayersUI();
+        composite();
+      }
+      renderToolProps();
+      return;
+    }
+
+    const fontString = getTextFontString(editorState.pending);
+    const textCanvas = createTextCanvas(textValue, fontString, editorState.pending.color, editorState.pending.fontSize);
+    if(targetLayer){
+      targetLayer.canvas = textCanvas;
+      targetLayer.ctx = textCanvas.getContext('2d');
+      targetLayer.text = textValue;
+      targetLayer.font = fontString;
+      targetLayer.color = editorState.pending.color;
+      targetLayer.fontSize = editorState.pending.fontSize;
+      targetLayer.fontFamily = editorState.pending.fontFamily;
+      targetLayer.bold = editorState.pending.bold;
+      targetLayer.offset = { ...editorState.anchor };
+      activeLayer = targetLayer;
+    } else {
+      const newLayer = {
+        canvas: textCanvas,
+        ctx: textCanvas.getContext('2d'),
+        name: 'Text',
+        offset: { ...editorState.anchor },
+        visible: true,
+        opacity: 1,
+        type: 'text',
+        text: textValue,
+        font: fontString,
+        color: editorState.pending.color,
+        fontSize: editorState.pending.fontSize,
+        fontFamily: editorState.pending.fontFamily,
+        bold: editorState.pending.bold
+      };
+      layers.push(newLayer);
+      activeLayer = newLayer;
+    }
+
+    renderLayersUI();
+    composite();
+    pushHistory();
+    renderToolProps();
+  }
+
+  editorState.commit = ()=> finalizeEditor(true);
+  editorState.cancel = ()=> finalizeEditor(false);
+
+  ta.addEventListener('input', ()=> syncTextEditorAppearance(editorState));
+  ta.addEventListener('keydown', (ev)=>{
+    if(ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)){
+      ev.preventDefault();
+      editorState.commit();
+    }
+    if(ev.key === 'Escape'){
+      ev.preventDefault();
+      editorState.cancel();
+    }
+  });
+
+  currentTextEditor = editorState;
+  syncTextEditorAppearance(editorState);
+  renderToolProps();
+  setTimeout(()=>{
+    try{
+      ta.focus();
+      ta.selectionStart = ta.selectionEnd = ta.value.length;
+    }catch(e){}
+  }, 0);
 }
 
 view.addEventListener('mousedown', (e)=>{
@@ -656,82 +855,18 @@ view.addEventListener('mousedown', (e)=>{
   }
 
   if(tool === 'text'){
-    // place an editable textarea over the viewport for typing
     const pos = getPos(e);
-    // if user clicked an existing text layer, open it for editing
-    for(let li=layers.length-1; li>=0; li--){
-      const lay = layers[li];
-      if(lay && lay.type === 'text' && lay.visible){
-        const lx = pos.x - lay.offset.x; const ly = pos.y - lay.offset.y;
-        if(lx >= 0 && ly >= 0 && lx <= lay.canvas.width && ly <= lay.canvas.height){
-          // edit this layer
-            const pagePos = canvasToPagePosition(lay.offset.x, lay.offset.y);
-          const ta = document.createElement('textarea');
-          ta.setAttribute('data-debug','text-tool-edit');
-            ta.style.position='fixed'; ta.style.left = pagePos.left + 'px'; ta.style.top = pagePos.top + 'px';
-          ta.style.minWidth='160px'; ta.style.minHeight='32px'; ta.style.padding='6px'; ta.style.background='rgba(255,255,200,0.98)'; ta.style.border='2px solid #f44'; ta.style.zIndex=99999; ta.style.resize='none'; ta.spellcheck=false; ta.style.outline='none';
-          ta.style.font = lay.font || ((lay.bold? 'bold ' : '') + (lay.fontSize||fontSize) + 'px ' + (lay.fontFamily||fontFamily));
-          ta.style.color = lay.color || color;
-          ta.value = lay.text || '';
-          document.body.appendChild(ta);
-          setTimeout(()=>{ try{ ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; }catch(e){} },0);
-          // prepare editor state (no blur commit). commit via Enter or Commit button in tool props
-          const pending = { color: lay.color || color, fontSize: lay.fontSize || fontSize, fontFamily: lay.fontFamily || fontFamily, bold: !!lay.bold };
-          function commitEdit(){
-            if(!currentTextEditor) return;
-            const txt = ta.value.replace(/\r\n/g, '\n');
-            try{ if(ta.parentNode) ta.parentNode.removeChild(ta);}catch(e){}
-            const fstr = (pending.bold? 'bold ' : '') + pending.fontSize + 'px ' + pending.fontFamily;
-            if(!txt.trim()){ currentTextEditor = null; return; }
-            const mcanvas = createTextCanvas(txt, fstr, pending.color, pending.fontSize);
-            lay.canvas = mcanvas; lay.ctx = mcanvas.getContext('2d'); lay.text = txt; lay.font = fstr; lay.color = pending.color; lay.fontSize = pending.fontSize; lay.fontFamily = pending.fontFamily; lay.bold = pending.bold;
-            currentTextEditor = null;
-            renderLayersUI(); composite(); pushHistory();
-          }
-          function cancelEdit(){ try{ if(ta.parentNode) ta.parentNode.removeChild(ta);}catch(e){} currentTextEditor = null; }
-          // require Ctrl/Cmd+Enter to commit; Enter inserts newline
-          ta.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter' && (ev.ctrlKey || ev.metaKey)){ ev.preventDefault(); commitEdit(); } if(ev.key === 'Escape'){ ev.preventDefault(); cancelEdit(); } });
-          currentTextEditor = { ta, layer: lay, pending, commit: commitEdit, cancel: cancelEdit };
-          return;
-        }
-      }
+    if(currentTextEditor){
+      try{ currentTextEditor.commit(); }catch(err){ currentTextEditor = null; }
     }
-    const pagePos = canvasToPagePosition(pos.x, pos.y);
-    const ta = document.createElement('textarea');
-    ta.setAttribute('data-debug','text-tool');
-    ta.style.position='fixed';
-    ta.style.left = pagePos.left + 'px';
-    ta.style.top = pagePos.top + 'px';
-    ta.style.minWidth='160px';
-    ta.style.minHeight='32px';
-    ta.style.padding = '6px';
-    ta.style.background='rgba(255,255,200,0.98)';
-    ta.style.border='2px solid #f44';
-    ta.style.zIndex=99999; ta.style.resize='none'; ta.spellcheck = false; ta.style.outline='none';
-    // mirror font settings so it's visible
-    const f = (fontBold? 'bold ' : '') + fontSize + 'px ' + fontFamily;
-    ta.style.font = f; ta.style.color = color;
-    // append to document body so left/top (page coords) position correctly
-    document.body.appendChild(ta);
-    // delay focus so mousedown/up sequence doesn't immediately blur it
-    setTimeout(()=>{ try{ ta.focus(); ta.selectionStart = ta.selectionEnd = ta.value.length; }catch(e){} }, 0);
-
-    // setup currentTextEditor for new text (no blur commit). will commit via Enter or Commit button
-    const pending = { color, fontSize, fontFamily, bold: fontBold };
-    function commitText(){
-      if(!currentTextEditor) return;
-      const txt = ta.value.replace(/\r\n/g, '\n');
-      try{ if(ta.parentNode) ta.parentNode.removeChild(ta); }catch(e){}
-      if(!txt.trim()){ currentTextEditor = null; return; }
-      const f2 = (pending.bold? 'bold ' : '') + pending.fontSize + 'px ' + pending.fontFamily;
-      const mcanvas = createTextCanvas(txt, f2, pending.color, pending.fontSize);
-      const newLayer = {canvas:mcanvas, ctx:mcanvas.getContext('2d'), name:'Text', offset:{x:Math.round(pos.x), y:Math.round(pos.y)}, visible:true, opacity:1, type:'text', text:txt, font:f2, color:pending.color, fontSize:pending.fontSize, fontFamily:pending.fontFamily, bold:pending.bold};
-      layers.push(newLayer); activeLayer = newLayer; currentTextEditor = null; renderLayersUI(); composite(); pushHistory();
+    const textLayer = findTextLayerAt(pos);
+    if(textLayer){
+      const layerIndex = layers.indexOf(textLayer);
+      if(layerIndex >= 0) setActiveLayer(layerIndex);
+      openTextEditor({ layer: textLayer });
+      return;
     }
-    function cancelText(){ try{ if(ta.parentNode) ta.parentNode.removeChild(ta); }catch(e){} currentTextEditor = null; }
-    // allow Enter for newlines; require Ctrl/Cmd+Enter to commit the text
-    ta.addEventListener('keydown', (ev)=>{ if(ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)){ ev.preventDefault(); commitText(); } if(ev.key === 'Escape'){ ev.preventDefault(); cancelText(); } });
-    currentTextEditor = { ta, layer: null, pending, commit: commitText, cancel: cancelText };
+    openTextEditor({ position: pos });
     return;
   }
   
@@ -1018,19 +1153,19 @@ function renderToolProps(){
     const colorBlk = createBlock('Color');
     const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value=color;
     colorInput.dataset.for = 'text';
-    colorInput.oninput=(e)=>{ color = e.target.value; if(currentTextEditor){ currentTextEditor.pending.color = color; currentTextEditor.ta.style.color = color; } };
+    colorInput.oninput=(e)=>{ color = e.target.value; if(currentTextEditor){ currentTextEditor.pending.color = color; syncTextEditorAppearance(currentTextEditor); } };
     colorBlk.appendChild(colorInput);
 
     const sizeBlk = createBlock('Font size');
-    const sizeInput = document.createElement('input'); sizeInput.type='number'; sizeInput.min=8; sizeInput.max=240; sizeInput.value=fontSize; sizeInput.oninput=(e)=>{ fontSize = Number(e.target.value); if(currentTextEditor){ currentTextEditor.pending.fontSize = fontSize; currentTextEditor.ta.style.font = (currentTextEditor.pending.bold? 'bold ' : '') + fontSize + 'px ' + currentTextEditor.pending.fontFamily; } };
+    const sizeInput = document.createElement('input'); sizeInput.type='number'; sizeInput.min=8; sizeInput.max=240; sizeInput.value=fontSize; sizeInput.oninput=(e)=>{ fontSize = Number(e.target.value); if(currentTextEditor){ currentTextEditor.pending.fontSize = fontSize; syncTextEditorAppearance(currentTextEditor); } };
     sizeBlk.appendChild(sizeInput);
 
     const familyBlk = createBlock('Font');
-    const sel = document.createElement('select'); ['sans-serif','serif','monospace'].forEach(f=>{ const o=document.createElement('option'); o.value=f; o.textContent=f; if(f===fontFamily) o.selected=true; sel.appendChild(o); }); sel.onchange=(e)=>{ fontFamily = e.target.value; if(currentTextEditor){ currentTextEditor.pending.fontFamily = fontFamily; currentTextEditor.ta.style.font = (currentTextEditor.pending.bold? 'bold ' : '') + currentTextEditor.pending.fontSize + 'px ' + fontFamily; } };
+    const sel = document.createElement('select'); ['sans-serif','serif','monospace'].forEach(f=>{ const o=document.createElement('option'); o.value=f; o.textContent=f; if(f===fontFamily) o.selected=true; sel.appendChild(o); }); sel.onchange=(e)=>{ fontFamily = e.target.value; if(currentTextEditor){ currentTextEditor.pending.fontFamily = fontFamily; syncTextEditorAppearance(currentTextEditor); } };
     familyBlk.appendChild(sel);
 
     const boldBlk = createBlock('Bold');
-    const boldChk = document.createElement('input'); boldChk.type='checkbox'; boldChk.checked = fontBold; boldChk.onchange = (e)=>{ fontBold = e.target.checked; if(currentTextEditor){ currentTextEditor.pending.bold = fontBold; currentTextEditor.ta.style.font = (fontBold? 'bold ' : '') + currentTextEditor.pending.fontSize + 'px ' + currentTextEditor.pending.fontFamily; } }; boldBlk.appendChild(boldChk);
+    const boldChk = document.createElement('input'); boldChk.type='checkbox'; boldChk.checked = fontBold; boldChk.onchange = (e)=>{ fontBold = e.target.checked; if(currentTextEditor){ currentTextEditor.pending.bold = fontBold; syncTextEditorAppearance(currentTextEditor); } }; boldBlk.appendChild(boldChk);
 
     el.appendChild(colorBlk); el.appendChild(sizeBlk); el.appendChild(familyBlk); el.appendChild(boldBlk);
     const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Click on canvas to place text. Edit existing text by clicking it.'; el.appendChild(help);
@@ -1066,7 +1201,7 @@ function renderToolProps(){
     colorInputs.forEach(ci=>{
       const parent = ci.parentElement || el;
       const isTextColor = ci.dataset && ci.dataset.for === 'text';
-      const cp = createColorPicker(color, (hex)=>{ color = hex; ci.value = hex; if(isTextColor && currentTextEditor){ currentTextEditor.pending.color = hex; currentTextEditor.ta.style.color = hex; } });
+      const cp = createColorPicker(color, (hex)=>{ color = hex; ci.value = hex; if(isTextColor && currentTextEditor){ currentTextEditor.pending.color = hex; syncTextEditorAppearance(currentTextEditor); } });
       parent.replaceChild(cp, ci);
     });
   }
@@ -1076,7 +1211,7 @@ function renderToolProps(){
     const parent = ci.parentElement || el;
     const isTextColor = ci.dataset && ci.dataset.for === 'text';
     // replace with custom color picker; if this is the text color control and a live editor exists, update it immediately
-    const cp = createColorPicker(color, (hex)=>{ color = hex; ci.value = hex; if(isTextColor && currentTextEditor){ currentTextEditor.pending.color = hex; currentTextEditor.ta.style.color = hex; } });
+    const cp = createColorPicker(color, (hex)=>{ color = hex; ci.value = hex; if(isTextColor && currentTextEditor){ currentTextEditor.pending.color = hex; syncTextEditorAppearance(currentTextEditor); } });
     parent.replaceChild(cp, ci);
   });
 }

@@ -156,6 +156,43 @@ input,select,textarea{accent-color:#737b84}
 .selection-rect{position:absolute;border:1px dashed rgba(220,225,230,0.55);background:rgba(255,255,255,0.06);pointer-events:none;border-radius:4px}
 .viewport{position:relative}
 
+.text-editor-shell{
+  position:fixed;
+  z-index:1400;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  background:linear-gradient(180deg,rgba(29,33,38,0.96),rgba(20,23,27,0.96));
+  border:1px solid rgba(255,255,255,0.12);
+  box-shadow:0 18px 42px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.04);
+  backdrop-filter:blur(14px);
+}
+
+.text-editor-input{
+  display:block;
+  margin:0;
+  padding:0;
+  border:none;
+  outline:none;
+  resize:none;
+  overflow:hidden;
+  background:transparent;
+  color:var(--text-1);
+  caret-color:var(--text-1);
+  white-space:pre-wrap;
+}
+
+.text-editor-input::selection{
+  background:rgba(255,255,255,0.16);
+}
+
+.text-editor-meta{
+  color:var(--text-4);
+  font-weight:600;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+
 /* Scrollbar styling */
 .tool-props-content::-webkit-scrollbar, #layers-list::-webkit-scrollbar{height:10px;width:10px}
 .tool-props-content::-webkit-scrollbar-thumb, #layers-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.06);border-radius:8px}
