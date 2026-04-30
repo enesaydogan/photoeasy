@@ -5,17 +5,22 @@ const layersList = document.getElementById('layers-list');
 const fileInput = document.getElementById('file-input');
 
 let width = 1200, height = 700;
-view.width = width; view.height = height;
-// Ensure the viewport wrapper matches the canvas aspect ratio and let the canvas scale via CSS
+// Keep the preview canvas sized to the viewport and render the document inside it.
 function updateViewportAspect(){
   const inner = document.getElementById('viewport-inner');
   if(inner){
-    try{ inner.style.setProperty('aspect-ratio', width + '/' + height); }catch(e){ /* ignore */ }
+    try{
+      inner.style.width = '100%';
+      inner.style.height = '100%';
+      inner.style.aspectRatio = 'auto';
+    }catch(e){ /* ignore */ }
   }
-  // let the canvas fill the wrapper (CSS handles scaling)
-  try{ view.style.width = '100%'; view.style.height = '100%'; }catch(e){}
+  try{
+    view.style.width = '100%';
+    view.style.height = '100%';
+    resizePreviewCanvas();
+  }catch(e){}
 }
-updateViewportAspect();
 
 const viewCtx = view.getContext('2d');
 let layers = []; // {canvas,ctx,name,offset:{x,y},visible,opacity}
@@ -38,8 +43,52 @@ let currentTextEditor = null; // {ta, layer, pending:{color,fontSize,fontFamily,
 let transformState = null; // {layer, cx, cy, w, h, rotation, scale, dragging, handle, startPos, startAngle, startScale}
 // Mask editing state
 let editMaskMode = false; // Whether to edit mask or layer content
-// Viewport transform state for zoom/drag
+// Viewport transform state for zoom/drag. scale is a multiplier on top of fit-to-panel.
 let viewportTransform = { scale: 1, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0 };
+
+function resizePreviewCanvas(){
+  const nextWidth = Math.max(1, viewport.clientWidth || 1);
+  const nextHeight = Math.max(1, viewport.clientHeight || 1);
+  if(view.width !== nextWidth || view.height !== nextHeight){
+    view.width = nextWidth;
+    view.height = nextHeight;
+  }
+}
+
+function getDisplayTransform(){
+  const fitScale = Math.min(view.width / width, view.height / height) || 1;
+  const totalScale = fitScale * viewportTransform.scale;
+  const originX = (view.width - width * totalScale) / 2 + viewportTransform.offsetX;
+  const originY = (view.height - height * totalScale) / 2 + viewportTransform.offsetY;
+  return { fitScale, totalScale, originX, originY };
+}
+
+function getViewPointFromClient(clientX, clientY){
+  const rect = view.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (view.width / rect.width),
+    y: (clientY - rect.top) * (view.height / rect.height)
+  };
+}
+
+function resetViewportTransform(){
+  viewportTransform.scale = 1;
+  viewportTransform.offsetX = 0;
+  viewportTransform.offsetY = 0;
+}
+
+function zoomViewport(nextScale, anchorX = view.width / 2, anchorY = view.height / 2){
+  const clampedScale = Math.max(0.1, Math.min(8, nextScale));
+  const before = getDisplayTransform();
+  const docX = (anchorX - before.originX) / before.totalScale;
+  const docY = (anchorY - before.originY) / before.totalScale;
+  viewportTransform.scale = clampedScale;
+  const after = getDisplayTransform();
+  viewportTransform.offsetX = anchorX - ((view.width - width * after.totalScale) / 2 + docX * after.totalScale);
+  viewportTransform.offsetY = anchorY - ((view.height - height * after.totalScale) / 2 + docY * after.totalScale);
+}
+
+updateViewportAspect();
 
 // History
 let history = [];
@@ -78,8 +127,6 @@ async function restoreHistory(idx){
   const snap = history[idx];
   width = snap.width || width;
   height = snap.height || height;
-  view.width = width;
-  view.height = height;
   try{ updateViewportAspect(); }catch(e){}
   try{ updateCanvasSizeDisplay(); }catch(e){}
   transformState = null;
@@ -149,7 +196,6 @@ function createLayer(name='Layer'){
   // if desired size differs from current view, update view size so canvases align
   if(desiredW !== width || desiredH !== height){
     width = desiredW; height = desiredH;
-    view.width = width; view.height = height;
     try{ updateCanvasSizeDisplay(); }catch(e){}
     try{ updateViewportAspect(); }catch(e){}
   }
@@ -393,10 +439,11 @@ function renderFlattenedToContext(destCtx, options = {}){
     blendRectToAcc(lx0, ly0, rw, rh, srcImg, layer);
   }
   destCtx.save();
-  destCtx.clearRect(0, 0, width, height);
+  destCtx.clearRect(0, 0, destCtx.canvas.width, destCtx.canvas.height);
   if(applyViewportTransform){
-    destCtx.translate(viewportTransform.offsetX, viewportTransform.offsetY);
-    destCtx.scale(viewportTransform.scale, viewportTransform.scale);
+    const display = getDisplayTransform();
+    destCtx.translate(display.originX, display.originY);
+    destCtx.scale(display.totalScale, display.totalScale);
   }
   destCtx.drawImage(accCanvas, 0, 0);
   destCtx.restore();
@@ -409,12 +456,13 @@ function composite(){
   if(transformState){
     const ts = transformState;
     const l = ts.layer;
+    const display = getDisplayTransform();
     // center of the bbox in canvas coords
     const cx = l.offset.x + ts.bounds.x + ts.bounds.w/2;
     const cy = l.offset.y + ts.bounds.y + ts.bounds.h/2;
     viewCtx.save();
-    viewCtx.translate(viewportTransform.offsetX, viewportTransform.offsetY);
-    viewCtx.scale(viewportTransform.scale, viewportTransform.scale);
+    viewCtx.translate(display.originX, display.originY);
+    viewCtx.scale(display.totalScale, display.totalScale);
     viewCtx.translate(cx, cy);
     viewCtx.rotate(ts.rotation);
     viewCtx.scale(ts.scale, ts.scale);
@@ -435,7 +483,10 @@ function composite(){
       const x = p.x * ts.scale; const y = p.y * ts.scale;
       const rx = x * Math.cos(ts.rotation) - y * Math.sin(ts.rotation);
       const ry = x * Math.sin(ts.rotation) + y * Math.cos(ts.rotation);
-      return {x: Math.round(cx + rx), y: Math.round(cy + ry)};
+      return {
+        x: Math.round(display.originX + (cx + rx) * display.totalScale),
+        y: Math.round(display.originY + (cy + ry) * display.totalScale)
+      };
     });
     viewCtx.strokeStyle = 'rgba(100,170,255,0.9)'; viewCtx.lineWidth = 1.5; viewCtx.beginPath();
     viewCtx.moveTo(corners[0].x, corners[0].y);
@@ -456,12 +507,10 @@ function composite(){
 
 // Drawing
 function getPos(e){
-  const rect = view.getBoundingClientRect();
-  const x = (e.clientX - rect.left) * (view.width/rect.width);
-  const y = (e.clientY - rect.top) * (view.height/rect.height);
-  // Apply inverse viewport transformation to get canvas coordinates
-  const canvasX = (x - viewportTransform.offsetX) / viewportTransform.scale;
-  const canvasY = (y - viewportTransform.offsetY) / viewportTransform.scale;
+  const point = getViewPointFromClient(e.clientX, e.clientY);
+  const display = getDisplayTransform();
+  const canvasX = (point.x - display.originX) / display.totalScale;
+  const canvasY = (point.y - display.originY) / display.totalScale;
   return {x: canvasX, y: canvasY};
 }
 
@@ -469,9 +518,10 @@ function canvasToPagePosition(x, y){
   const rect = view.getBoundingClientRect();
   const cssScaleX = rect.width / view.width;
   const cssScaleY = rect.height / view.height;
+  const display = getDisplayTransform();
   return {
-    left: rect.left + (x * viewportTransform.scale + viewportTransform.offsetX) * cssScaleX,
-    top: rect.top + (y * viewportTransform.scale + viewportTransform.offsetY) * cssScaleY
+    left: rect.left + (display.originX + x * display.totalScale) * cssScaleX,
+    top: rect.top + (display.originY + y * display.totalScale) * cssScaleY
   };
 }
 
@@ -1180,19 +1230,17 @@ const redoBtn = document.getElementById('redo'); if(redoBtn) redoBtn.addEventLis
 
 // Zoom control buttons
 document.getElementById('zoom-in')?.addEventListener('click', () => {
-  viewportTransform.scale = Math.min(5, viewportTransform.scale * 1.2);
+  zoomViewport(viewportTransform.scale * 1.2);
   composite();
 });
 
 document.getElementById('zoom-out')?.addEventListener('click', () => {
-  viewportTransform.scale = Math.max(0.1, viewportTransform.scale * 0.8);
+  zoomViewport(viewportTransform.scale * 0.8);
   composite();
 });
 
 document.getElementById('reset-zoom')?.addEventListener('click', () => {
-  viewportTransform.scale = 1;
-  viewportTransform.offsetX = 0;
-  viewportTransform.offsetY = 0;
+  resetViewportTransform();
   composite();
 });
 
@@ -1269,8 +1317,6 @@ function confirmResize() {
   // Update the canvas dimensions
   width = newWidth;
   height = newHeight;
-  view.width = width;
-  view.height = height;
   try{ updateViewportAspect(); }catch(e){}
   
   // Resize each layer's canvas
@@ -1327,7 +1373,6 @@ function handleFile(e){
       const newWidth = img.width; const newHeight = img.height;
       // Update view dimensions
       width = newWidth; height = newHeight;
-      view.width = width; view.height = height;
       try{ updateViewportAspect(); }catch(e){}
 
       // Resize each layer's canvas and masks similar to confirmResize
@@ -1349,10 +1394,8 @@ function handleFile(e){
         }
       }
       try{ updateCanvasSizeDisplay(); }catch(e){}
-      // Reset viewport transform so the view shows at 1:1 pixel scale after resizing
-      viewportTransform.scale = 1;
-      viewportTransform.offsetX = 0;
-      viewportTransform.offsetY = 0;
+      // Reset viewport transform so the view refits after resizing
+      resetViewportTransform();
     }
 
     // Create imported layer and draw the image. If we resized canvas to image dimensions, draw at native size.
@@ -1568,11 +1611,9 @@ function commitCrop(){
       }
       layer.canvas = newC; layer.ctx = nctx; layer.offset.x = layer.offset.x - sx; layer.offset.y = layer.offset.y - sy;
     }
-    width = sw; height = sh; view.width = width; view.height = height; try{ updateViewportAspect(); }catch(e){}
+    width = sw; height = sh; try{ updateViewportAspect(); }catch(e){}
     try{ updateCanvasSizeDisplay(); }catch(e){}
-    viewportTransform.scale = 1;
-    viewportTransform.offsetX = 0;
-    viewportTransform.offsetY = 0;
+    resetViewportTransform();
     renderLayersUI(); composite(); pushHistory();
   }
   selection = null; cropPending = false; renderToolProps();
@@ -1588,9 +1629,10 @@ function setupViewportControls() {
   // Middle mouse button or space + left mouse for dragging
   viewport.addEventListener('mousedown', (e) => {
     if (e.button === 1 || (e.button === 0 && e.ctrlKey)) { // Middle button or Ctrl+Left
+      const point = getViewPointFromClient(e.clientX, e.clientY);
       viewportTransform.isDragging = true;
-      viewportTransform.startX = e.clientX - viewportTransform.offsetX;
-      viewportTransform.startY = e.clientY - viewportTransform.offsetY;
+      viewportTransform.startX = point.x;
+      viewportTransform.startY = point.y;
       viewport.style.cursor = 'grabbing';
       e.preventDefault();
     }
@@ -1598,8 +1640,11 @@ function setupViewportControls() {
 
   window.addEventListener('mousemove', (e) => {
     if (viewportTransform.isDragging) {
-      viewportTransform.offsetX = e.clientX - viewportTransform.startX;
-      viewportTransform.offsetY = e.clientY - viewportTransform.startY;
+      const point = getViewPointFromClient(e.clientX, e.clientY);
+      viewportTransform.offsetX += point.x - viewportTransform.startX;
+      viewportTransform.offsetY += point.y - viewportTransform.startY;
+      viewportTransform.startX = point.x;
+      viewportTransform.startY = point.y;
       composite();
     }
   });
@@ -1614,22 +1659,9 @@ function setupViewportControls() {
   // Mouse wheel for zooming
   viewport.addEventListener('wheel', (e) => {
     e.preventDefault();
-    
-    // Get mouse position relative to viewport
-    const rect = viewport.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    // Calculate zoom factor
+    const point = getViewPointFromClient(e.clientX, e.clientY);
     const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-    const oldScale = viewportTransform.scale;
-    const newScale = Math.max(0.1, Math.min(5, viewportTransform.scale * zoomFactor));
-    
-    // Zoom towards mouse cursor
-    viewportTransform.offsetX = mouseX - (mouseX - viewportTransform.offsetX) * (newScale / oldScale);
-    viewportTransform.offsetY = mouseY - (mouseY - viewportTransform.offsetY) * (newScale / oldScale);
-    viewportTransform.scale = newScale;
-    
+    zoomViewport(viewportTransform.scale * zoomFactor, point.x, point.y);
     composite();
   });
 
@@ -1647,9 +1679,7 @@ function setupViewportControls() {
   resetViewBtn.style.borderRadius = '6px';
   resetViewBtn.style.cursor = 'pointer';
   resetViewBtn.addEventListener('click', () => {
-    viewportTransform.scale = 1;
-    viewportTransform.offsetX = 0;
-    viewportTransform.offsetY = 0;
+    resetViewportTransform();
     composite();
   });
   viewport.appendChild(resetViewBtn);
@@ -1658,6 +1688,8 @@ function setupViewportControls() {
 // Init default - only create Background layer
 createLayer('Background');
 setupViewportControls();
+window.addEventListener('resize', () => { resizePreviewCanvas(); composite(); });
+resizePreviewCanvas();
 composite();
 renderToolProps();
 updateCanvasSizeDisplay();
