@@ -6,6 +6,9 @@ const fileInput = document.getElementById('file-input');
 const canvasOnboarding = document.getElementById('canvas-onboarding');
 const toolHintEl = document.getElementById('tool-hint');
 const historyLabelEl = document.getElementById('history-label');
+const historyPanelEl = document.getElementById('history-panel');
+const historyListEl = document.getElementById('history-list');
+const historyMetaEl = document.getElementById('history-meta');
 const statusStackEl = document.getElementById('status-stack');
 const zoomReadoutEl = document.getElementById('zoom-readout');
 const sidebar = document.getElementById('sidebar');
@@ -54,6 +57,8 @@ let editMaskMode = false; // Whether to edit mask or layer content
 // Viewport transform state for zoom/drag. scale is a multiplier on top of fit-to-panel.
 let viewportTransform = { scale: 1, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0 };
 let layerDragIndex = null;
+let renamingLayerIndex = null;
+let renamingLayerDraft = '';
 
 const cursorPreview = document.createElement('div');
 cursorPreview.className = 'cursor-preview';
@@ -167,6 +172,52 @@ function updateHistoryLabel(){
   historyLabelEl.textContent = 'Undo: ' + currentLabel;
 }
 
+function getHistoryDisplayLabel(snapshot, idx){
+  const label = snapshot?.label || 'Edit';
+  if(idx === 0 && label === 'Blank Document') return 'Blank Document';
+  if(label === 'Create Background') return 'Canvas Ready';
+  return label;
+}
+
+function renderHistoryPanel(){
+  if(!historyListEl || !historyPanelEl) return;
+  historyListEl.innerHTML = '';
+  if(historyMetaEl) historyMetaEl.textContent = history.length ? (historyIndex + 1) + ' / ' + history.length : '0 / 0';
+  for(let idx = history.length - 1; idx >= 0; idx--){
+    const snapshot = history[idx];
+    const entry = document.createElement('button');
+    entry.type = 'button';
+    entry.className = 'history-entry';
+    if(idx === historyIndex) entry.classList.add('active');
+    if(idx > historyIndex) entry.classList.add('future');
+
+    const step = document.createElement('span');
+    step.className = 'history-entry-step';
+    step.textContent = String(idx + 1).padStart(2, '0');
+
+    const label = document.createElement('span');
+    label.className = 'history-entry-label';
+    label.textContent = getHistoryDisplayLabel(snapshot, idx);
+
+    entry.appendChild(step);
+    entry.appendChild(label);
+
+    if(idx === historyIndex){
+      const current = document.createElement('span');
+      current.className = 'history-entry-current';
+      current.textContent = 'Current';
+      entry.appendChild(current);
+      entry.setAttribute('aria-current', 'step');
+    } else {
+      entry.onclick = async ()=>{
+        await restoreHistory(idx);
+        addStatus('Restored ' + getHistoryDisplayLabel(snapshot, idx) + '.', 'info', 1800);
+      };
+    }
+    historyListEl.appendChild(entry);
+  }
+}
+
 function updateZoomReadout(){
   if(!zoomReadoutEl) return;
   const display = getDisplayTransform();
@@ -188,6 +239,47 @@ function updateCanvasChrome(){
   updateHistoryLabel();
   updateZoomReadout();
   updateSidebarPriority();
+}
+
+function startLayerRename(index){
+  if(index < 0 || index >= layers.length) return;
+  renamingLayerIndex = index;
+  renamingLayerDraft = layers[index].name || '';
+  renderLayersUI();
+  window.requestAnimationFrame(()=>{
+    const input = layersList.querySelector('[data-layer-rename="' + index + '"]');
+    if(input){
+      input.focus();
+      input.select();
+    }
+  });
+}
+
+function cancelLayerRename(){
+  renamingLayerIndex = null;
+  renamingLayerDraft = '';
+  renderLayersUI();
+}
+
+function commitLayerRename(index, nextName){
+  const layer = layers[index];
+  renamingLayerIndex = null;
+  renamingLayerDraft = '';
+  if(!layer){
+    renderLayersUI();
+    return;
+  }
+  const trimmedName = (nextName || '').trim();
+  if(!trimmedName){
+    renderLayersUI();
+    return;
+  }
+  if(trimmedName !== layer.name){
+    layer.name = trimmedName;
+    pushHistory('Rename Layer');
+    addStatus('Layer renamed.', 'info', 1800);
+  }
+  renderLayersUI();
 }
 
 function applyTooltips(){
@@ -376,6 +468,8 @@ async function restoreHistory(idx){
   const snap = history[idx];
   width = snap.width || width;
   height = snap.height || height;
+  renamingLayerIndex = null;
+  renamingLayerDraft = '';
   try{ updateViewportAspect(); }catch(e){}
   try{ updateCanvasSizeDisplay(); }catch(e){}
   transformState = null;
@@ -434,6 +528,7 @@ function updateHistoryButtons(){
     if(redoBtn) redoBtn.disabled = historyIndex >= history.length-1 || history.length===0;
   }catch(e){}
   updateCanvasChrome();
+  renderHistoryPanel();
 }
 
 async function undo(){
@@ -480,7 +575,7 @@ function createLayer(name='Layer', options = {}){
 }
 
 // ensure there's an initial history snapshot representing the empty document
-pushHistory();
+pushHistory('Blank Document');
 updateHistoryButtons();
 
 function setActiveLayer(idx){
@@ -496,6 +591,10 @@ function deleteActiveLayer(){
   }
   const idx = layers.indexOf(activeLayer);
   if(idx>=0){
+    if(renamingLayerIndex === idx){
+      renamingLayerIndex = null;
+      renamingLayerDraft = '';
+    }
     const deletedName = activeLayer.name || 'Layer';
     layers.splice(idx,1);
     activeLayer = layers[layers.length-1] || null;
@@ -515,8 +614,38 @@ function renderLayersUI(){
     row.draggable = true;
     const thumb = document.createElement('canvas'); thumb.className = 'layer-thumb'; thumb.width = 56; thumb.height = 42;
     try{ const tctx = thumb.getContext('2d'); tctx.clearRect(0,0,thumb.width,thumb.height); tctx.drawImage(layer.canvas, 0,0, layer.canvas.width, layer.canvas.height, 0,0, thumb.width, thumb.height); }catch(e){}
-    const name = document.createElement('div'); name.className='layer-name'; name.textContent=layer.name;
-    name.ondblclick = (ev)=>{ ev.stopPropagation(); const nn = prompt('Rename layer', layer.name); if(nn){ layer.name = nn; renderLayersUI(); pushHistory('Rename Layer'); addStatus('Layer renamed.', 'info', 1800); } };
+    let nameNode;
+    if(renamingLayerIndex === i){
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'layer-name-input';
+      nameInput.value = renamingLayerDraft;
+      nameInput.dataset.layerRename = String(i);
+      nameInput.setAttribute('aria-label', 'Rename ' + layer.name);
+      nameInput.oninput = (ev)=>{ renamingLayerDraft = ev.target.value; };
+      nameInput.onkeydown = (ev)=>{
+        ev.stopPropagation();
+        if(ev.key === 'Enter'){
+          ev.preventDefault();
+          commitLayerRename(i, nameInput.value);
+        }
+        if(ev.key === 'Escape'){
+          ev.preventDefault();
+          cancelLayerRename();
+        }
+      };
+      nameInput.onblur = ()=> commitLayerRename(i, nameInput.value);
+      ['pointerdown', 'mousedown', 'click', 'dblclick'].forEach((eventName)=>{
+        nameInput.addEventListener(eventName, (ev)=> ev.stopPropagation());
+      });
+      nameNode = nameInput;
+    } else {
+      const name = document.createElement('div');
+      name.className='layer-name';
+      name.textContent=layer.name;
+      name.ondblclick = (ev)=>{ ev.stopPropagation(); startLayerRename(i); };
+      nameNode = name;
+    }
     const opacity = document.createElement('input'); opacity.type = 'range'; opacity.min = 0; opacity.max = 1; opacity.step = 0.01; opacity.value = layer.opacity; opacity.className = 'layer-opacity';
     const opVal = document.createElement('div'); opVal.className = 'layer-opacity-value'; opVal.textContent = Math.round(layer.opacity*100) + '%';
     opacity.oninput = (e)=>{ layer.opacity = Number(e.target.value); opVal.textContent = Math.round(layer.opacity*100) + '%'; composite(); };
@@ -541,10 +670,15 @@ function renderLayersUI(){
 
     const meta = document.createElement('div'); meta.className = 'layer-meta';
     // Name on top (title style) to avoid layout breaks from long names
-    name.style.whiteSpace = 'nowrap'; name.style.overflow = 'hidden'; name.style.textOverflow = 'ellipsis'; name.style.width = '100%';
     const headerRow = document.createElement('div');
     headerRow.className = 'layer-header-row';
-    headerRow.appendChild(name);
+    if(nameNode.classList.contains('layer-name')){
+      nameNode.style.whiteSpace = 'nowrap';
+      nameNode.style.overflow = 'hidden';
+      nameNode.style.textOverflow = 'ellipsis';
+      nameNode.style.width = '100%';
+    }
+    headerRow.appendChild(nameNode);
     if(layer === activeLayer){
       const activeBadge = document.createElement('span');
       activeBadge.className = 'layer-badge';

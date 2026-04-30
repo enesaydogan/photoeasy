@@ -85,7 +85,6 @@
         <div id="canvas-hud" class="canvas-hud">
           <div id="tool-hint" class="tool-hint" aria-live="polite"></div>
           <div class="canvas-status-row">
-            <div id="history-label" class="history-label" aria-live="polite"></div>
             <div id="status-stack" class="status-stack" aria-live="polite" aria-atomic="true"></div>
           </div>
         </div>
@@ -96,6 +95,13 @@
       <div id="tool-props" class="tool-props sidebar-panel" aria-live="polite">
         <div class="tool-props-title">Tool Properties</div>
         <div id="tool-props-content" class="tool-props-content"></div>
+      </div>
+      <div id="history-panel" class="history-panel sidebar-panel" aria-live="polite">
+        <div class="history-panel-header">
+          <div class="layers-title">History</div>
+          <div id="history-meta" class="history-meta">0 / 0</div>
+        </div>
+        <div id="history-list" class="history-list"></div>
       </div>
       <div id="layers-panel" class="layers-panel sidebar-panel">
         <div class="layers-header">
