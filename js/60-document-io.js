@@ -6,6 +6,45 @@ document.getElementById('save-project').addEventListener('click', saveProject);
 document.getElementById('open-project').addEventListener('click', ()=> projectFileInput.click());
 document.getElementById('export').addEventListener('click', exportPNG);
 document.getElementById('import-image').addEventListener('click', ()=> fileInput.click());
+
+// Import options popover. The checkbox inside is read by id at import time, so
+// it keeps working for both the file picker and drag-and-drop.
+const importOptionsBtn = document.getElementById('import-options');
+const importMenu = document.getElementById('import-menu');
+
+// The menu is position:fixed, so it has to be placed against the button each
+// time it opens; anything anchored inside .actions gets clipped by its scroll.
+function positionImportMenu(){
+  const anchor = importOptionsBtn.closest('.menu-anchor') || importOptionsBtn;
+  const rect = anchor.getBoundingClientRect();
+  const menuWidth = importMenu.offsetWidth;
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+  importMenu.style.top = (rect.bottom + 7) + 'px';
+  importMenu.style.left = left + 'px';
+}
+
+function setImportMenuOpen(open){
+  importMenu.hidden = !open;
+  importOptionsBtn.setAttribute('aria-expanded', String(open));
+  importOptionsBtn.classList.toggle('is-on', open);
+  if(open) positionImportMenu();
+}
+
+importOptionsBtn.addEventListener('click', (event)=>{
+  event.stopPropagation();
+  setImportMenuOpen(importMenu.hidden);
+});
+importMenu.addEventListener('click', (event)=> event.stopPropagation());
+document.addEventListener('click', ()=> setImportMenuOpen(false));
+document.addEventListener('keydown', (event)=>{
+  if(event.key === 'Escape' && !importMenu.hidden){
+    setImportMenuOpen(false);
+    importOptionsBtn.focus();
+  }
+});
+// Rather than track the anchor, drop the menu when it could drift from it.
+window.addEventListener('resize', ()=> setImportMenuOpen(false));
+document.querySelector('.actions')?.addEventListener('scroll', ()=> setImportMenuOpen(false));
 document.getElementById('resize-canvas').addEventListener('click', resizeCanvas);
 
 // history buttons

@@ -244,6 +244,30 @@ button:disabled:hover {
   color: var(--danger);
 }
 
+/* The primary action in its group (Export) stays tinted so the icon-only bar
+   still has one obvious destination. */
+.icon-btn.is-accent {
+  color: var(--accent);
+}
+
+.icon-btn.is-accent:hover {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Toolbar icons run slightly larger than the layer panel's. */
+.actions .icon-btn {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+}
+
+.actions .icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* ── toolbar ─────────────────────────────────── */
 .toolbar {
   position: relative;
@@ -300,45 +324,77 @@ button:disabled:hover {
   display: none;
 }
 
+/* No padding here: the toolbar is icon buttons now, and a blanket padding
+   outranks .icon-btn's own, squeezing the content box until the glyph
+   overflows off-centre. The remaining text buttons (zoom) set their own. */
 .actions button {
   flex: 0 0 auto;
-  padding: 0 12px;
 }
 
-#export {
-  color: var(--accent);
-}
-
-#export:hover {
-  color: var(--accent);
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
-
-.import-resize-label {
-  display: inline-flex;
+/* Related actions sit tight together; the rules between groups do the
+   separating, so the bar reads in chunks rather than as one long run. */
+.action-group {
+  display: flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: 7px;
-  height: 34px;
-  padding: 0 11px;
-  white-space: nowrap;
+  gap: 2px;
+}
+
+/* ── import options popover ──────────────────── */
+.menu-anchor {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.caret-btn {
+  width: 18px;
+}
+
+.caret-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Fixed, and placed by JS: .actions is a horizontal scroll container, which
+   clips (and swallows clicks on) any absolutely positioned child. */
+.toolbar-menu {
+  position: fixed;
+  z-index: 400;
+  min-width: 220px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lifted);
+}
+
+.toolbar-menu[hidden] {
+  display: none;
+}
+
+.menu-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 7px;
+  border-radius: 7px;
   color: var(--muted);
   font-size: 12.5px;
   font-weight: 500;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface);
+  line-height: 1.35;
   cursor: pointer;
-  transition: color .15s, border-color .15s;
 }
 
-.import-resize-label:hover {
+.menu-check:hover {
+  background: var(--tint-1);
   color: var(--ink);
-  border-color: var(--muted);
 }
 
-.import-resize-label input {
+.menu-check input {
+  flex: 0 0 auto;
   width: 13px;
   height: 13px;
   cursor: pointer;
@@ -449,16 +505,19 @@ button:disabled:hover {
   }
 }
 
-.tool-header-controls {
+/* One auto margin on the cluster, so language and theme end up flush right
+   rather than trailing the editing actions. */
+.toolbar-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex: 0 0 auto;
+  gap: 10px;
   margin-left: auto;
+  padding-left: 4px;
 }
 
 .canvas-size {
   flex: 0 0 auto;
-  margin-left: auto;
   color: var(--faint);
   font: 500 11.5px/1 var(--mono);
   letter-spacing: .05em;

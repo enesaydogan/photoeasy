@@ -293,8 +293,9 @@ function applyTooltips(){
     'zoom-in': { labelKey: 'header.zoomIn', shortcut: null },
     'zoom-out': { labelKey: 'header.zoomOut', shortcut: null },
     'dup-layer': { labelKey: 'layers.duplicate', shortcut: 'Ctrl+J' },
-    'save-project': { labelKey: 'header.saveProject', shortcut: 'Ctrl+S' },
-    'open-project': { labelKey: 'header.openProject', shortcut: 'Ctrl+O' },
+    // Icon-only buttons: the descriptive label carries more than the verb.
+    'save-project': { labelKey: 'header.saveProjectTitle', shortcut: 'Ctrl+S' },
+    'open-project': { labelKey: 'header.openProjectTitle', shortcut: 'Ctrl+O' },
     export: { labelKey: 'header.export', shortcut: 'Ctrl+Shift+S' },
     undo: { labelKey: 'header.undo', shortcut: 'Ctrl+Z' },
     redo: { labelKey: 'header.redo', shortcut: 'Ctrl+Shift+Z' }
