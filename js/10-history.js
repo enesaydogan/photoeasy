@@ -2,7 +2,7 @@
 // History
 let history = [];
 let historyIndex = -1;
-function pushHistory(label = 'Edit'){
+function pushHistory(label = 'history.edit'){
   // capture state
   const snapshot = {width, height, layers: [], activeIndex: layers.indexOf(activeLayer), label, size: 0};
   for(const l of layers){
@@ -19,6 +19,7 @@ function pushHistory(label = 'Edit'){
       mask: maskURL,
       locked: l.locked || false,
       role: l.role || null,
+      autoName: l.autoName ? { key: l.autoName.key, params: { ...(l.autoName.params || {}) } } : null,
       type: l.type || null,
       text: l.text || null,
       font: l.font || null,
@@ -44,7 +45,7 @@ function loadImageFromDataURL(dataURL){
   return new Promise((resolve, reject)=>{
     const img = new Image();
     img.onload = ()=> resolve(img);
-    img.onerror = ()=> reject(new Error('History image could not be decoded.'));
+    img.onerror = ()=> reject(new Error(t('status.historyRestoreFailed')));
     img.src = dataURL;
   });
 }
@@ -82,6 +83,7 @@ async function restoreHistory(idx){
       maskCanvas: null,
       locked: item.locked || false,
       role: item.role || null,
+      autoName: item.autoName || null,
       type: item.type || null,
       text: item.text || null,
       font: item.font || null,
@@ -99,6 +101,7 @@ async function restoreHistory(idx){
   }));
   if(restoreToken !== historyRestoreToken) return;
   layers = newLayers;
+  localizeGeneratedLayerNames();
   activeLayer = layers[snap.activeIndex] || null;
   editMaskMode = false;
   if(currentTextEditor){
@@ -107,7 +110,7 @@ async function restoreHistory(idx){
   renderLayersUI(); composite();
   historyIndex = idx;
   }catch(error){
-    if(restoreToken === historyRestoreToken) addStatus(error.message || 'History could not be restored.', 'warning', 3200);
+    if(restoreToken === historyRestoreToken) addStatus(error.message || t('status.historyRestoreFailed'), 'warning', 3200);
   }finally{
     if(restoreToken === historyRestoreToken){
       historyRestoring = false;
@@ -129,16 +132,15 @@ function updateHistoryButtons(){
 
 async function undo(){
   if(!historyRestoring && historyIndex > 0){
-    const label = history[historyIndex]?.label || 'edit';
+    const label = getHistoryDisplayLabel(history[historyIndex], historyIndex);
     await restoreHistory(historyIndex-1);
-    addStatus('Undid ' + label + '.', 'info', 1800);
+    addStatus(t('history.undid', { action: label }), 'info', 1800);
   }
 }
 async function redo(){
   if(!historyRestoring && historyIndex < history.length-1){
-    const label = history[historyIndex + 1]?.label || 'edit';
+    const label = getHistoryDisplayLabel(history[historyIndex + 1], historyIndex + 1);
     await restoreHistory(historyIndex+1);
-    addStatus('Redid ' + label + '.', 'info', 1800);
+    addStatus(t('history.redid', { action: label }), 'info', 1800);
   }
 }
-

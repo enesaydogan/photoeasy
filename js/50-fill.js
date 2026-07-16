@@ -40,7 +40,7 @@ function floodFillCompositeAt(pageX, pageY, fillHex){
   const filled = applyMaskToColor(mask, width, height, fillHex);
   // add new layer with filled pixels
   const newCanvas = document.createElement('canvas'); newCanvas.width = width; newCanvas.height = height; const nctx = newCanvas.getContext('2d'); nctx.drawImage(filled,0,0);
-  const newLayer = {canvas:newCanvas, ctx:newCanvas.getContext('2d'), name:'Fill', offset:{x:0,y:0}, visible:true, opacity:1, blend:'source-over', maskCanvas:null, locked:false, role:null};
+  const newLayer = {canvas:newCanvas, ctx:newCanvas.getContext('2d'), name:t('layer.fill'), autoName:{ key:'layer.fill' }, offset:{x:0,y:0}, visible:true, opacity:1, blend:'source-over', maskCanvas:null, locked:false, role:null};
   layers.push(newLayer); activeLayer = newLayer; renderLayersUI(); composite(); pushHistory();
 }
 
@@ -80,6 +80,9 @@ function getLayerContentBounds(layer){
   }catch(e){ return { x: 0, y: 0, w: w, h: h }; }
 }
 
-document.getElementById('add-layer').addEventListener('click', ()=> createLayer('Layer ' + (layers.length+1)));
+document.getElementById('add-layer').addEventListener('click', ()=>{
+  const number = layers.length + 1;
+  createLayer(t('layer.number', { n: number }), { autoName: { key:'layer.number', params:{ n:number } } });
+});
 document.getElementById('dup-layer').addEventListener('click', ()=> duplicateActiveLayer());
 document.getElementById('del-layer').addEventListener('click', ()=> deleteActiveLayer());

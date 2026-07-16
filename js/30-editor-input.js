@@ -137,7 +137,7 @@ function openTextEditor(options){
 
   const meta = document.createElement('div');
   meta.className = 'text-editor-meta';
-  meta.textContent = 'Ctrl+Enter to commit  \u2022  Esc to cancel';
+  meta.textContent = t('text.editorMeta');
 
   shell.appendChild(ta);
   shell.appendChild(meta);
@@ -163,7 +163,7 @@ function openTextEditor(options){
     if(!commitChanges){
       renderToolProps();
       composite();
-      addStatus('Text edit canceled.', 'info', 1600);
+      addStatus(t('status.textCanceled'), 'info', 1600);
       return;
     }
 
@@ -175,8 +175,8 @@ function openTextEditor(options){
           if(activeLayer === targetLayer) activeLayer = layers[layerIndex] || layers[layerIndex - 1] || null;
           renderLayersUI();
           composite();
-          pushHistory('Delete Text Layer');
-          addStatus('Empty text layer removed. Undo restores it.', 'warning', 2600);
+          pushHistory('history.deleteText');
+          addStatus(t('status.emptyTextRemoved'), 'warning', 2600);
         }
       } else {
         renderLayersUI();
@@ -192,7 +192,7 @@ function openTextEditor(options){
       if(!layers.includes(targetLayer)){
         renderToolProps();
         composite();
-        addStatus('Text edit was discarded because the layer no longer exists.', 'warning', 2600);
+        addStatus(t('status.textDiscarded'), 'warning', 2600);
         return;
       }
       targetLayer.canvas = textCanvas;
@@ -209,7 +209,8 @@ function openTextEditor(options){
       const newLayer = {
         canvas: textCanvas,
         ctx: textCanvas.getContext('2d'),
-        name: 'Text',
+        name: t('layer.text'),
+        autoName: { key: 'layer.text' },
         offset: { ...editorState.anchor },
         visible: true,
         opacity: 1,
@@ -231,8 +232,8 @@ function openTextEditor(options){
 
     renderLayersUI();
     composite();
-    pushHistory(targetLayer ? 'Edit Text' : 'Add Text');
-    addStatus(targetLayer ? 'Text updated.' : 'Text layer created.', 'info', 1800);
+    pushHistory(targetLayer ? 'history.editText' : 'history.addText');
+    addStatus(t(targetLayer ? 'status.textUpdated' : 'status.textCreated'), 'info', 1800);
     renderToolProps();
   }
 
@@ -276,7 +277,7 @@ view.addEventListener('pointerdown', (e)=>{
   
   // Prevent editing of locked layers for drawing tools
   if(activeLayer && activeLayer.locked && ['brush', 'eraser', 'fill', 'transform', 'select', 'magic'].includes(tool)) {
-    addStatus('Layer is locked. Unlock it to edit.', 'warning', 2800);
+    addStatus(t('status.lockedEdit'), 'warning', 2800);
     updateCursorFeedback(e.clientX, e.clientY);
     return;
   }
@@ -327,7 +328,7 @@ view.addEventListener('pointerdown', (e)=>{
       const layerIndex = layers.indexOf(clickedLayer);
       if(layerIndex >= 0 && clickedLayer !== activeLayer) setActiveLayer(layerIndex);
       if(clickedLayer.locked){
-        addStatus('Layer is locked. Unlock it to move.', 'warning', 2800);
+        addStatus(t('status.lockedMove'), 'warning', 2800);
         updateCursorFeedback(e.clientX, e.clientY);
         return;
       }
@@ -341,7 +342,7 @@ view.addEventListener('pointerdown', (e)=>{
     } else {
       if(!activeLayer) return;
       if(activeLayer.locked){
-        addStatus('Layer is locked. Unlock it to move.', 'warning', 2800);
+        addStatus(t('status.lockedMove'), 'warning', 2800);
         updateCursorFeedback(e.clientX, e.clientY);
         return;
       }
@@ -356,7 +357,7 @@ view.addEventListener('pointerdown', (e)=>{
     const zoomFactor = e.altKey ? 0.8 : 1.25;
     zoomViewport(viewportTransform.scale * zoomFactor, point.x, point.y);
     composite();
-    addStatus(e.altKey ? 'Zoomed out.' : 'Zoomed in.', 'info', 1200);
+    addStatus(t(e.altKey ? 'status.zoomOut' : 'status.zoomIn'), 'info', 1200);
     return;
   }
 
@@ -364,7 +365,7 @@ view.addEventListener('pointerdown', (e)=>{
     // start selection rect
     const startCanvas = getPos(e);
     if(!isPointInsideDocument(startCanvas)){
-      addStatus('Start the selection inside the canvas.', 'warning', 2200);
+      addStatus(t('status.selectionInside'), 'warning', 2200);
       return;
     }
     const vpRect = viewport.getBoundingClientRect();
@@ -381,7 +382,7 @@ view.addEventListener('pointerdown', (e)=>{
     // start crop rect (re-uses selection overlay)
     const startCanvas = getPos(e);
     if(!isPointInsideDocument(startCanvas)){
-      addStatus('Start the crop inside the canvas.', 'warning', 2200);
+      addStatus(t('status.cropInside'), 'warning', 2200);
       return;
     }
     const vpRect = viewport.getBoundingClientRect();
@@ -395,8 +396,8 @@ view.addEventListener('pointerdown', (e)=>{
 
   if(tool === 'magic'){
     const pos = getPos(e);
-    if(!activeLayer) { addStatus('Select a layer before using Magic Wand.', 'warning'); return; }
-    if(!isPointInsideDocument(pos)){ addStatus('Click inside the canvas to create a mask.', 'warning'); return; }
+    if(!activeLayer) { addStatus(t('status.selectMagicLayer'), 'warning'); return; }
+    if(!isPointInsideDocument(pos)){ addStatus(t('status.magicInside'), 'warning'); return; }
     const tmpc = document.createElement('canvas'); tmpc.width = width; tmpc.height = height; const tctx2 = tmpc.getContext('2d', { willReadFrequently: true });
     renderFlattenedToContext(tctx2);
     const compImg = tctx2.getImageData(0,0,width,height);
@@ -406,15 +407,15 @@ view.addEventListener('pointerdown', (e)=>{
     for(let i=0;i<mask.length;i++){ const a = mask[i]?255:0; const idx = i*4; md.data[idx]=255; md.data[idx+1]=255; md.data[idx+2]=255; md.data[idx+3]=a; }
     mctx.putImageData(md,0,0);
     activeLayer.maskCanvas = mc;
-    pushHistory('Magic Wand Mask'); renderLayersUI(); composite();
-    addStatus('Mask created from the clicked region.', 'info', 1800);
+    pushHistory('history.magicMask'); renderLayersUI(); composite();
+    addStatus(t('status.magicCreated'), 'info', 1800);
     return;
   }
 
   if(tool === 'text'){
     const pos = getPos(e);
     if(!isPointInsideDocument(pos)){
-      addStatus('Click inside the canvas to add text.', 'warning', 2200);
+      addStatus(t('status.textInside'), 'warning', 2200);
       return;
     }
     if(currentTextEditor){
@@ -443,7 +444,7 @@ view.addEventListener('pointerdown', (e)=>{
       const compImg = tctx.getImageData(0,0,width,height);
       const mask = floodFillMask(compImg, Math.round(pos.x), Math.round(pos.y));
       applyMaskToLayer(mask, width, height, activeLayer, color);
-      pushHistory('Composite Fill'); renderLayersUI(); composite();
+      pushHistory('history.compositeFill'); renderLayersUI(); composite();
     } else {
       // compute mask on the active layer only
       const lx = Math.round(pos.x - activeLayer.offset.x); const ly = Math.round(pos.y - activeLayer.offset.y);
@@ -451,9 +452,9 @@ view.addEventListener('pointerdown', (e)=>{
       const img = activeLayer.ctx.getImageData(0,0,activeLayer.canvas.width, activeLayer.canvas.height);
       const mask = floodFillMask(img, lx, ly);
       applyMaskToLayer(mask, activeLayer.canvas.width, activeLayer.canvas.height, activeLayer, color);
-      pushHistory('Fill Layer'); renderLayersUI(); composite();
+      pushHistory('history.fillLayer'); renderLayersUI(); composite();
     }
-    addStatus('Fill applied.', 'info', 1600);
+    addStatus(t('status.fillApplied'), 'info', 1600);
     return;
   }
 
@@ -586,12 +587,12 @@ function finishPointerInteraction(e){
         cctx.drawImage(activeLayer.canvas, sx, sy, sw, sh, 0,0,sw,sh);
         // clear area on original layer
         activeLayer.ctx.clearRect(sx, sy, sw, sh);
-        const newLayer = {canvas:c, ctx:cctx, name:'Selection', offset:{x: Math.round(s.x), y: Math.round(s.y)}, visible:true, opacity:1, blend:'source-over', maskCanvas:null, locked:false, role:null};
+        const newLayer = {canvas:c, ctx:cctx, name:t('layer.selection'), autoName:{ key:'layer.selection' }, offset:{x: Math.round(s.x), y: Math.round(s.y)}, visible:true, opacity:1, blend:'source-over', maskCanvas:null, locked:false, role:null};
         layers.push(newLayer);
         activeLayer = newLayer;
         renderLayersUI(); composite();
-        pushHistory('Lift Selection To Layer');
-        addStatus('Selection moved into a new layer. Undo restores the original pixels.', 'info', 2600);
+        pushHistory('history.liftSelection');
+        addStatus(t('status.selectionLifted'), 'info', 2600);
       }
     }
     selection = null; return;
@@ -619,20 +620,20 @@ function finishPointerInteraction(e){
   if(tool === 'move'){
     if(moveInteraction){
       if(moveInteraction.duplicated && moveInteraction.moved){
-        pushHistory('Duplicate And Move Layer');
-        addStatus(moveInteraction.sourceName + ' duplicated and moved.', 'info', 2200);
+        pushHistory('history.duplicateMove');
+        addStatus(t('status.layerDuplicatedMoved', { name: moveInteraction.sourceName }), 'info', 2200);
       } else if(moveInteraction.duplicated){
-        pushHistory('Duplicate Layer');
-        addStatus(moveInteraction.sourceName + ' created. Undo restores the previous layer stack.', 'info', 2400);
+        pushHistory('history.duplicateLayer');
+        addStatus(t('status.layerCreated', { name: moveInteraction.sourceName }), 'info', 2400);
       } else if(moveInteraction.moved){
-        pushHistory('Move Layer');
+        pushHistory('history.moveLayer');
       }
     }
     moveInteraction = null;
     drawingSession = null;
     return;
   }
-  if(drawingSession?.changed) pushHistory(tool === 'brush' ? 'Brush Stroke' : 'Erase Stroke');
+  if(drawingSession?.changed) pushHistory(tool === 'brush' ? 'history.brushStroke' : 'history.eraseStroke');
   drawingSession = null;
 }
 view.addEventListener('pointerup', finishPointerInteraction);

@@ -149,12 +149,12 @@ function confirmResize() {
   try{
     resizeDocumentTo(newWidth, newHeight);
   }catch(error){
-    addStatus(error.message || 'Canvas could not be resized.', 'warning', 3200);
+    addStatus(error.message || t('status.resizeFailed'), 'warning', 3200);
     return;
   }
   composite();
-  pushHistory('Resize Canvas');
-  addStatus('Canvas resized. Undo restores the previous size.', 'warning', 3200);
+  pushHistory('history.resizeCanvas');
+  addStatus(t('status.resizeApplied'), 'warning', 3200);
   
   closeResizeModal();
 }
@@ -173,13 +173,13 @@ function handleFile(e){
       const validationError = validateCanvasSize(newWidth, newHeight);
       if(validationError){ addStatus(validationError, 'warning', 3400); return; }
       try{ resizeDocumentTo(newWidth, newHeight); }
-      catch(error){ addStatus(error.message || 'Image dimensions are too large.', 'warning', 3400); return; }
+      catch(error){ addStatus(error.message || t('status.imageTooLarge'), 'warning', 3400); return; }
       // Reset viewport transform so the view refits after resizing
       resetViewportTransform();
     }
 
     // Create imported layer and draw the image. If we resized canvas to image dimensions, draw at native size.
-    createLayer('Imported', { skipHistory: true });
+    createLayer(t('layer.imported'), { skipHistory: true, autoName: { key:'layer.imported' } });
     const l = activeLayer;
     if(resizeToImage){
       try{ l.ctx.drawImage(img, 0, 0); } catch(e) { /* ignore */ }
@@ -195,13 +195,13 @@ function handleFile(e){
       try { l.ctx.drawImage(img, 0, 0, imgW, imgH, dx, dy, drawW, drawH); } catch(e) { /* ignore */ }
     }
     composite();
-    pushHistory('Import Image');
-    addStatus('Image imported.', 'info', 1800);
+    pushHistory('history.importImage');
+    addStatus(t('status.imageImported'), 'info', 1800);
   };
   img.onerror = ()=>{
     URL.revokeObjectURL(objectUrl);
     fileInput.value = '';
-    addStatus('The selected image could not be opened.', 'warning', 3200);
+    addStatus(t('status.imageOpenFailed'), 'warning', 3200);
   };
   img.src = objectUrl;
 }
@@ -210,7 +210,7 @@ function exportPNG(){
   const out = document.createElement('canvas'); out.width = width; out.height = height; const octx = out.getContext('2d');
   renderFlattenedToContext(octx);
   out.toBlob((blob)=>{
-    if(!blob){ addStatus('PNG export failed.', 'warning', 2600); return; }
+    if(!blob){ addStatus(t('status.exportFailed'), 'warning', 2600); return; }
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.download = 'photoeasy-export.png'; a.href = url; a.click();
     window.setTimeout(()=> URL.revokeObjectURL(url), 1000);

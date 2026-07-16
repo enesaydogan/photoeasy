@@ -38,25 +38,25 @@ function renderToolProps(){
   const createBlock = (title)=>{ const blk = document.createElement('div'); blk.className = 'prop-block'; const t = document.createElement('div'); t.className='prop-title'; t.textContent = title; blk.appendChild(t); return blk; };
 
   if(tool === 'brush'){
-    const colorBlk = createBlock('Color');
-    const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value = color; colorInput.setAttribute('aria-label','Brush color'); colorInput.oninput = (e)=> color = e.target.value;
+    const colorBlk = createBlock(t('props.color'));
+    const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value = color; colorInput.setAttribute('aria-label',t('props.brushColor')); colorInput.oninput = (e)=> color = e.target.value;
     colorBlk.appendChild(colorInput);
 
-    const sizeBlk = createBlock('Size');
+    const sizeBlk = createBlock(t('props.size'));
     const sizeRow = document.createElement('div'); sizeRow.className = 'prop-control-row';
-    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.setAttribute('aria-label','Brush size'); sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
+    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.setAttribute('aria-label',t('props.brushSize')); sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
     const sizeVal = document.createElement('div'); sizeVal.className='prop-value'; sizeVal.textContent = size;
     sizeRow.appendChild(sizeRange); sizeRow.appendChild(sizeVal); sizeBlk.appendChild(sizeRow);
 
-    const opBlk = createBlock('Opacity');
+    const opBlk = createBlock(t('props.opacity'));
     const opRow = document.createElement('div'); opRow.className='prop-control-row';
-    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.setAttribute('aria-label','Brush opacity'); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
+    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.setAttribute('aria-label',t('props.brushOpacity')); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
     const opVal = document.createElement('div'); opVal.className='prop-value'; opVal.textContent = Math.round(toolOpacity*100) + '%';
     opRow.appendChild(opRange); opRow.appendChild(opVal); opBlk.appendChild(opRow);
 
     // Add mask editing toggle if layer has a mask
     if(activeLayer && activeLayer.maskCanvas){
-      const maskBlk = createBlock('Mask Editing');
+      const maskBlk = createBlock(t('props.maskEditing'));
       const maskToggle = document.createElement('label');
       maskToggle.style.display = 'flex'; maskToggle.style.alignItems = 'center'; maskToggle.style.gap = '8px';
       const maskCheckbox = document.createElement('input'); maskCheckbox.type = 'checkbox';
@@ -64,7 +64,7 @@ function renderToolProps(){
       maskCheckbox.onchange = (e) => {
         editMaskMode = e.target.checked;
       };
-      const maskLabel = document.createElement('span'); maskLabel.textContent = 'Edit Mask';
+      const maskLabel = document.createElement('span'); maskLabel.textContent = t('props.editMask');
       maskLabel.style.color = '#a9b6d8'; maskLabel.style.fontSize = '14px';
       maskToggle.appendChild(maskCheckbox); maskToggle.appendChild(maskLabel);
       maskBlk.appendChild(maskToggle);
@@ -73,20 +73,20 @@ function renderToolProps(){
 
     el.appendChild(colorBlk); el.appendChild(sizeBlk); el.appendChild(opBlk);
   } else if(tool === 'eraser'){
-    const sizeBlk = createBlock('Size');
+    const sizeBlk = createBlock(t('props.size'));
     const sizeRow = document.createElement('div'); sizeRow.className = 'prop-control-row';
-    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.setAttribute('aria-label','Eraser size'); sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
+    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.setAttribute('aria-label',t('props.eraserSize')); sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
     const sizeVal = document.createElement('div'); sizeVal.className='prop-value'; sizeVal.textContent = size;
     sizeRow.appendChild(sizeRange); sizeRow.appendChild(sizeVal); sizeBlk.appendChild(sizeRow);
-    const opBlk = createBlock('Opacity');
+    const opBlk = createBlock(t('props.opacity'));
     const opRow = document.createElement('div'); opRow.className='prop-control-row';
-    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.setAttribute('aria-label','Eraser opacity'); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
+    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.setAttribute('aria-label',t('props.eraserOpacity')); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
     const opVal = document.createElement('div'); opVal.className='prop-value'; opVal.textContent = Math.round(toolOpacity*100) + '%';
     opRow.appendChild(opRange); opRow.appendChild(opVal); opBlk.appendChild(opRow);
 
     // Add mask editing toggle if layer has a mask
     if(activeLayer && activeLayer.maskCanvas){
-      const maskBlk = createBlock('Mask Editing');
+      const maskBlk = createBlock(t('props.maskEditing'));
       const maskToggle = document.createElement('label');
       maskToggle.style.display = 'flex'; maskToggle.style.alignItems = 'center'; maskToggle.style.gap = '8px';
       const maskCheckbox = document.createElement('input'); maskCheckbox.type = 'checkbox';
@@ -94,7 +94,7 @@ function renderToolProps(){
       maskCheckbox.onchange = (e) => {
         editMaskMode = e.target.checked;
       };
-      const maskLabel = document.createElement('span'); maskLabel.textContent = 'Edit Mask';
+      const maskLabel = document.createElement('span'); maskLabel.textContent = t('props.editMask');
       maskLabel.style.color = '#a9b6d8'; maskLabel.style.fontSize = '14px';
       maskToggle.appendChild(maskCheckbox); maskToggle.appendChild(maskLabel);
       maskBlk.appendChild(maskToggle);
@@ -103,67 +103,67 @@ function renderToolProps(){
 
     el.appendChild(sizeBlk); el.appendChild(opBlk);
   } else if(tool === 'transform'){
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Transform active layer pixels (tight bounds). Use handles to scale/rotate, Move to drag.'; el.appendChild(help);
+    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.transformHelp'); el.appendChild(help);
     if(transformState){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
-      const ok = document.createElement('button'); ok.textContent = 'Commit Transform'; ok.onclick = ()=>{ try{ commitTransform(); }catch(e){} };
-      const cancel = document.createElement('button'); cancel.textContent = 'Cancel Transform'; cancel.onclick = ()=>{ try{ cancelTransform(); }catch(e){} };
+      const ok = document.createElement('button'); ok.textContent = t('props.commitTransform'); ok.onclick = ()=>{ try{ commitTransform(); }catch(e){} };
+      const cancel = document.createElement('button'); cancel.textContent = t('props.cancelTransform'); cancel.onclick = ()=>{ try{ cancelTransform(); }catch(e){} };
       row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
     } else {
-      const info = document.createElement('div'); info.style.color='#999'; info.style.fontSize='12px'; info.textContent='Click the canvas to begin transforming the active layer.'; el.appendChild(info);
+      const info = document.createElement('div'); info.style.color='#999'; info.style.fontSize='12px'; info.textContent=t('props.transformStart'); el.appendChild(info);
     }
   } else if(tool === 'text'){
-    const colorBlk = createBlock('Color');
+    const colorBlk = createBlock(t('props.color'));
     const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value=color;
     colorInput.dataset.for = 'text';
     colorInput.oninput=(e)=>{ color = e.target.value; if(currentTextEditor){ currentTextEditor.pending.color = color; syncTextEditorAppearance(currentTextEditor); } };
     colorBlk.appendChild(colorInput);
 
-    const sizeBlk = createBlock('Font size');
+    const sizeBlk = createBlock(t('props.fontSize'));
     const sizeInput = document.createElement('input'); sizeInput.type='number'; sizeInput.min=8; sizeInput.max=240; sizeInput.value=fontSize; sizeInput.oninput=(e)=>{ fontSize = Number(e.target.value); if(currentTextEditor){ currentTextEditor.pending.fontSize = fontSize; syncTextEditorAppearance(currentTextEditor); } };
     sizeBlk.appendChild(sizeInput);
 
-    const familyBlk = createBlock('Font');
+    const familyBlk = createBlock(t('props.font'));
     const sel = document.createElement('select'); ['sans-serif','serif','monospace'].forEach(f=>{ const o=document.createElement('option'); o.value=f; o.textContent=f; if(f===fontFamily) o.selected=true; sel.appendChild(o); }); sel.onchange=(e)=>{ fontFamily = e.target.value; if(currentTextEditor){ currentTextEditor.pending.fontFamily = fontFamily; syncTextEditorAppearance(currentTextEditor); } };
     familyBlk.appendChild(sel);
 
-    const boldBlk = createBlock('Bold');
+    const boldBlk = createBlock(t('props.bold'));
     const boldChk = document.createElement('input'); boldChk.type='checkbox'; boldChk.checked = fontBold; boldChk.onchange = (e)=>{ fontBold = e.target.checked; if(currentTextEditor){ currentTextEditor.pending.bold = fontBold; syncTextEditorAppearance(currentTextEditor); } }; boldBlk.appendChild(boldChk);
 
     el.appendChild(colorBlk); el.appendChild(sizeBlk); el.appendChild(familyBlk); el.appendChild(boldBlk);
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Click on canvas to place text. Edit existing text by clicking it.'; el.appendChild(help);
+    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.textHelp'); el.appendChild(help);
     // if editing right now, show commit/cancel buttons
     if(currentTextEditor){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
-      const commitBtn = document.createElement('button'); commitBtn.textContent = 'Commit (Ctrl+Enter)'; commitBtn.onclick = ()=>{ currentTextEditor.commit(); };
-      const cancelBtn = document.createElement('button'); cancelBtn.textContent = 'Cancel (Esc)'; cancelBtn.onclick = ()=>{ currentTextEditor.cancel(); };
+      const commitBtn = document.createElement('button'); commitBtn.textContent = t('props.commitText'); commitBtn.onclick = ()=>{ currentTextEditor.commit(); };
+      const cancelBtn = document.createElement('button'); cancelBtn.textContent = t('props.cancelText'); cancelBtn.onclick = ()=>{ currentTextEditor.cancel(); };
       row.appendChild(commitBtn); row.appendChild(cancelBtn); el.appendChild(row);
     }
   } else if(tool === 'zoom'){
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Zoom tool: click to zoom in, Alt+click to zoom out, or use Fit / 100% in the toolbar.'; el.appendChild(help);
+    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.zoomHelp'); el.appendChild(help);
     const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
-    const fitBtn = document.createElement('button'); fitBtn.textContent = 'Fit View'; fitBtn.onclick = ()=> fitView(true);
+    const fitBtn = document.createElement('button'); fitBtn.textContent = t('props.fitView'); fitBtn.onclick = ()=> fitView(true);
     const actualBtn = document.createElement('button'); actualBtn.textContent = '100%'; actualBtn.onclick = ()=> setActualSize(true);
     row.appendChild(fitBtn); row.appendChild(actualBtn); el.appendChild(row);
   } else if(tool === 'crop'){
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent='Click and drag to select crop area. Release to preview, then Commit or Cancel.'; el.appendChild(help);
+    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.cropHelp'); el.appendChild(help);
     if(cropPending){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
-      const ok = document.createElement('button'); ok.textContent = 'Commit Crop'; ok.onclick = ()=>{ try{ commitCrop(); }catch(e){} };
-      const cancel = document.createElement('button'); cancel.textContent = 'Cancel Crop'; cancel.onclick = ()=>{ try{ cancelCrop(); }catch(e){} };
+      const ok = document.createElement('button'); ok.textContent = t('props.commitCrop'); ok.onclick = ()=>{ try{ commitCrop(); }catch(e){} };
+      const cancel = document.createElement('button'); cancel.textContent = t('props.cancelCrop'); cancel.onclick = ()=>{ try{ cancelCrop(); }catch(e){} };
       row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
     }
   } else {
-    const info = document.createElement('div'); info.style.color='#ddd'; info.style.fontSize='13px'; info.textContent='Tool options'; el.appendChild(info);
+    const info = document.createElement('div'); info.style.color='#ddd'; info.style.fontSize='13px'; info.textContent=t('props.toolOptions'); el.appendChild(info);
   }
   if(tool === 'fill'){
     // add color picker and option to calculate mask on composite (but always apply to active layer)
-    const colorBlk = createBlock('Fill Color');
+    const colorBlk = createBlock(t('props.fillColor'));
     const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value = color; colorInput.oninput = (e)=> color = e.target.value;
     colorBlk.appendChild(colorInput);
-    const optBlk = createBlock('Mask Source');
+    const optBlk = createBlock(t('props.maskSource'));
     const chk = document.createElement('input'); chk.type='checkbox'; chk.id = 'fill-use-composite'; chk.checked = !!window.fillUseComposite; chk.onchange = (e)=> window.fillUseComposite = e.target.checked;
-    const lbl = document.createElement('label'); lbl.htmlFor = chk.id; lbl.textContent = 'Calculate mask from composite (all layers)'; optBlk.appendChild(chk); optBlk.appendChild(lbl);
+    const lbl = document.createElement('label'); lbl.htmlFor = chk.id; lbl.textContent = t('props.compositeMask'); optBlk.appendChild(chk); optBlk.appendChild(lbl);
     el.appendChild(colorBlk); el.appendChild(optBlk);
     // replace color input with picker
     const colorInputs = el.querySelectorAll('input[type="color"]');
@@ -203,7 +203,7 @@ function createColorPicker(initialHex, onChange){
   const hue = document.createElement('input'); hue.type='range'; hue.className='cp-hue'; hue.min=0; hue.max=360; hue.value=0;
   const controls = document.createElement('div'); controls.className='cp-controls';
   const hexIn = document.createElement('input'); hexIn.className='cp-hex'; hexIn.value = initialHex;
-  hexIn.setAttribute('aria-label', 'Hex color');
+  hexIn.setAttribute('aria-label', t('props.hexColor'));
   const swatch = document.createElement('div'); swatch.className='cp-swatch'; swatch.style.background = initialHex;
   controls.appendChild(hexIn); controls.appendChild(swatch);
   const recent = document.createElement('div'); recent.className='cp-recent'; // placeholder
@@ -248,10 +248,9 @@ function createColorPicker(initialHex, onChange){
   sv.addEventListener('pointercancel', releaseSv);
 
   hue.addEventListener('input', (e)=>{ hsv.h = Number(e.target.value); updateUI(); });
-  hexIn.addEventListener('change', (e)=>{ try{ const rgb = hexToRgb(e.target.value); const h = rgbToHsv(rgb.r,rgb.g,rgb.b); hsv = h; hexIn.removeAttribute('aria-invalid'); updateUI(); }catch(err){ hexIn.setAttribute('aria-invalid', 'true'); addStatus('Enter a valid 3 or 6 digit hex color.', 'warning', 2200); } });
+  hexIn.addEventListener('change', (e)=>{ try{ const rgb = hexToRgb(e.target.value); const h = rgbToHsv(rgb.r,rgb.g,rgb.b); hsv = h; hexIn.removeAttribute('aria-invalid'); updateUI(); }catch(err){ hexIn.setAttribute('aria-invalid', 'true'); addStatus(t('status.invalidHex'), 'warning', 2200); } });
 
   // initial draw
   updateUI();
   return wrapper;
 }
-

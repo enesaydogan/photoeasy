@@ -1,6 +1,6 @@
 // Layer lifecycle, layer UI, and canvas compositing.
-function createLayer(name='Layer', options = {}){
-  const { historyLabel = 'Add Layer', skipHistory = false, role = null } = options;
+function createLayer(name=t('layer.number', { n: layers.length + 1 }), options = {}){
+  const { historyLabel = 'history.createLayer', skipHistory = false, role = null, autoName = null } = options;
   // ensure new layer canvas matches the largest existing layer or the current view
   let desiredW = width, desiredH = height;
   for(const l of layers){ if(l && l.canvas){ desiredW = Math.max(desiredW, l.canvas.width); desiredH = Math.max(desiredH, l.canvas.height); } }
@@ -17,7 +17,7 @@ function createLayer(name='Layer', options = {}){
   if(isBackground){
     ctx.save(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,c.width,c.height); ctx.restore();
   }
-  const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null, locked: isBackground, role};
+  const layer = {canvas:c,ctx,name,autoName,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null, locked: isBackground, role};
   layers.push(layer);
   activeLayer = layer;
   editMaskMode = false;
@@ -36,21 +36,21 @@ function cloneCanvas(sourceCanvas){
 }
 
 function getDuplicateLayerName(baseName){
-  const sanitizedBase = (baseName || 'Layer').trim() || 'Layer';
+  const sanitizedBase = (baseName || t('layer.number', { n: layers.length + 1 })).trim() || t('layer.number', { n: layers.length + 1 });
   const existingNames = new Set(layers.map((layer)=> layer.name));
-  let candidate = sanitizedBase + ' copy';
+  let candidate = t('layer.copy', { name: sanitizedBase });
   let copyIndex = 2;
   while(existingNames.has(candidate)){
-    candidate = sanitizedBase + ' copy ' + copyIndex;
+    candidate = t('layer.copy', { name: sanitizedBase }) + ' ' + copyIndex;
     copyIndex += 1;
   }
   return candidate;
 }
 
 function duplicateLayer(sourceLayer = activeLayer, options = {}){
-  const { activate = true, skipHistory = false, historyLabel = 'Duplicate Layer', showToast = true } = options;
+  const { activate = true, skipHistory = false, historyLabel = 'history.duplicateLayer', showToast = true } = options;
   if(!sourceLayer){
-    addStatus('No active layer to duplicate.', 'warning');
+    addStatus(t('status.noDuplicateLayer'), 'warning');
     return null;
   }
   const sourceIndex = layers.indexOf(sourceLayer);
@@ -67,6 +67,7 @@ function duplicateLayer(sourceLayer = activeLayer, options = {}){
     maskCanvas: sourceLayer.maskCanvas ? cloneCanvas(sourceLayer.maskCanvas) : null,
     locked: !!sourceLayer.locked,
     role: null,
+    autoName: null,
     type: sourceLayer.type || null,
     text: sourceLayer.text || null,
     font: sourceLayer.font || null,
@@ -80,7 +81,7 @@ function duplicateLayer(sourceLayer = activeLayer, options = {}){
   renderLayersUI();
   composite();
   if(!skipHistory) pushHistory(historyLabel);
-  if(showToast) addStatus(duplicateLayer.name + ' created. Undo restores the previous layer stack.', 'info', 2400);
+  if(showToast) addStatus(t('status.layerCreated', { name: duplicateLayer.name }), 'info', 2400);
   return duplicateLayer;
 }
 
@@ -89,7 +90,7 @@ function duplicateActiveLayer(){
 }
 
 // ensure there's an initial history snapshot representing the empty document
-pushHistory('Blank Document');
+pushHistory('history.blankDocument');
 updateHistoryButtons();
 
 function setActiveLayer(idx){
@@ -105,7 +106,7 @@ function setActiveLayer(idx){
 
 function deleteActiveLayer(){
   if(!activeLayer){
-    addStatus('No active layer to remove.', 'warning');
+    addStatus(t('status.noRemoveLayer'), 'warning');
     return;
   }
   const idx = layers.indexOf(activeLayer);
@@ -117,12 +118,12 @@ function deleteActiveLayer(){
       renamingLayerIndex = null;
       renamingLayerDraft = '';
     }
-    const deletedName = activeLayer.name || 'Layer';
+    const deletedName = activeLayer.name || t('layer.number', { n: idx + 1 });
     layers.splice(idx,1);
     activeLayer = layers[layers.length-1] || null;
     renderLayersUI(); composite();
-    pushHistory('Delete Layer');
-    addStatus(deletedName + ' deleted. Undo restores it.', 'warning', 3200);
+    pushHistory('history.deleteLayer');
+    addStatus(t('status.layerDeleted', { name: deletedName }), 'warning', 3200);
   }
 }
 
@@ -143,7 +144,7 @@ function renderLayersUI(){
       nameInput.className = 'layer-name-input';
       nameInput.value = renamingLayerDraft;
       nameInput.dataset.layerRename = String(i);
-      nameInput.setAttribute('aria-label', 'Rename ' + layer.name);
+      nameInput.setAttribute('aria-label', t('layers.renameAria', { name: layer.name }));
       nameInput.oninput = (ev)=>{ renamingLayerDraft = ev.target.value; };
       nameInput.onkeydown = (ev)=>{
         ev.stopPropagation();
@@ -169,10 +170,10 @@ function renderLayersUI(){
       nameNode = name;
     }
     const opacity = document.createElement('input'); opacity.type = 'range'; opacity.min = 0; opacity.max = 1; opacity.step = 0.01; opacity.value = layer.opacity; opacity.className = 'layer-opacity';
-    opacity.setAttribute('aria-label', layer.name + ' opacity');
+    opacity.setAttribute('aria-label', t('layers.opacityAria', { name: layer.name }));
     const opVal = document.createElement('div'); opVal.className = 'layer-opacity-value'; opVal.textContent = Math.round(layer.opacity*100) + '%';
     opacity.oninput = (e)=>{ layer.opacity = Number(e.target.value); opVal.textContent = Math.round(layer.opacity*100) + '%'; composite(); };
-    opacity.onchange = ()=> pushHistory('Adjust Layer Opacity');
+    opacity.onchange = ()=> pushHistory('history.adjustOpacity');
     // prevent clicks on controls from bubbling and re-rendering the layer row (which closes selects)
     opacity.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
     opacity.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
@@ -181,16 +182,16 @@ function renderLayersUI(){
     const dragHandle = document.createElement('button');
     dragHandle.type = 'button';
     dragHandle.className = 'layer-icon layer-grip';
-    dragHandle.title = 'Drag to reorder layer';
-    dragHandle.setAttribute('aria-label', 'Drag ' + layer.name + ' to reorder');
+    dragHandle.title = t('layers.dragTitle');
+    dragHandle.setAttribute('aria-label', t('layers.dragAria', { name: layer.name }));
     dragHandle.textContent = '::';
     dragHandle.onclick = (ev)=> ev.stopPropagation();
     const vis = document.createElement('button');
     vis.type = 'button';
     vis.className = 'layer-icon';
-    vis.title = layer.visible ? 'Hide layer' : 'Show layer';
-    vis.textContent = layer.visible ? 'Hide' : 'Show';
-    vis.onclick = (ev)=>{ ev.stopPropagation(); layer.visible = !layer.visible; composite(); renderLayersUI(); pushHistory(layer.visible ? 'Show Layer' : 'Hide Layer'); };
+    vis.title = layer.visible ? t('layers.hideTitle') : t('layers.showTitle');
+    vis.textContent = layer.visible ? t('layers.hide') : t('layers.show');
+    vis.onclick = (ev)=>{ ev.stopPropagation(); layer.visible = !layer.visible; composite(); renderLayersUI(); pushHistory(layer.visible ? 'history.showLayer' : 'history.hideLayer'); };
 
     const meta = document.createElement('div'); meta.className = 'layer-meta';
     // Name on top (title style) to avoid layout breaks from long names
@@ -206,7 +207,7 @@ function renderLayersUI(){
     if(layer === activeLayer){
       const activeBadge = document.createElement('span');
       activeBadge.className = 'layer-badge';
-      activeBadge.textContent = 'Active';
+      activeBadge.textContent = t('layers.active');
       headerRow.appendChild(activeBadge);
     }
     meta.appendChild(headerRow);
@@ -220,10 +221,10 @@ function renderLayersUI(){
     controlWrap.appendChild(opRow);
     // blend mode selector
     const blendRow = document.createElement('div'); blendRow.className = 'layer-blend-row';
-    const blendLabel = document.createElement('div'); blendLabel.className='prop-title'; blendLabel.textContent='Blend';
-    const blendSel = document.createElement('select'); ['source-over','multiply','screen','overlay','darken','lighten'].forEach(b=>{ const o=document.createElement('option'); o.value=b; o.textContent=b; if((layer.blend||'source-over')===b) o.selected=true; blendSel.appendChild(o); });
-    blendSel.setAttribute('aria-label', layer.name + ' blend mode');
-    blendSel.onchange = (e)=>{ layer.blend = e.target.value; composite(); pushHistory('Change Blend Mode'); };
+    const blendLabel = document.createElement('div'); blendLabel.className='prop-title'; blendLabel.textContent=t('layers.blend');
+    const blendSel = document.createElement('select'); ['source-over','multiply','screen','overlay','darken','lighten'].forEach(b=>{ const o=document.createElement('option'); o.value=b; o.textContent=t('blend.' + b); if((layer.blend||'source-over')===b) o.selected=true; blendSel.appendChild(o); });
+    blendSel.setAttribute('aria-label', t('layers.blendAria', { name: layer.name }));
+    blendSel.onchange = (e)=>{ layer.blend = e.target.value; composite(); pushHistory('history.blendMode'); };
     // prevent the select from bubbling (keeps the dropdown open while interacting)
     blendSel.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
     blendSel.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
@@ -241,19 +242,19 @@ function renderLayersUI(){
     const lockBtn = document.createElement('button');
     lockBtn.type = 'button';
     lockBtn.className = 'layer-icon lock-btn';
-    lockBtn.textContent = layer.locked ? 'Unlock' : 'Lock';
-    lockBtn.title = layer.locked ? 'Unlock this layer' : 'Lock this layer';
+    lockBtn.textContent = layer.locked ? t('layers.unlock') : t('layers.lock');
+    lockBtn.title = layer.locked ? t('layers.unlockTitle') : t('layers.lockTitle');
     lockBtn.onclick = (ev) => {
       ev.stopPropagation();
       layer.locked = !layer.locked;
       renderLayersUI();
-      pushHistory(layer.locked ? 'Lock Layer' : 'Unlock Layer');
+      pushHistory(layer.locked ? 'history.lockLayer' : 'history.unlockLayer');
     };
     leftControls.appendChild(lockBtn);
 
     // Mask button (right)
-    const maskBtn = document.createElement('button'); maskBtn.type = 'button'; maskBtn.className='mask-btn'; maskBtn.textContent = layer.maskCanvas? 'Remove Mask' : 'Add Mask';
-    maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; if(layer === activeLayer) editMaskMode = false; addStatus('Mask removed. Undo restores it.', 'warning', 3200); pushHistory('Remove Mask'); } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; pushHistory('Add Mask'); addStatus('Mask added to ' + layer.name + '.', 'info', 1800); } renderLayersUI(); composite(); renderToolProps(); };
+    const maskBtn = document.createElement('button'); maskBtn.type = 'button'; maskBtn.className='mask-btn'; maskBtn.textContent = layer.maskCanvas? t('layers.removeMask') : t('layers.addMask');
+    maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; if(layer === activeLayer) editMaskMode = false; addStatus(t('status.maskRemoved'), 'warning', 3200); pushHistory('history.removeMask'); } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; pushHistory('history.addMask'); addStatus(t('status.maskAdded', { name: layer.name }), 'info', 1800); } renderLayersUI(); composite(); renderToolProps(); };
     rightControls.appendChild(maskBtn);
 
     controlRow.appendChild(leftControls);
@@ -264,13 +265,13 @@ function renderLayersUI(){
     row.appendChild(controls);
     controls.appendChild(vis);
     const raise = document.createElement('button');
-    raise.type = 'button'; raise.className = 'layer-icon'; raise.textContent = 'Up';
-    raise.title = 'Move layer up'; raise.setAttribute('aria-label', 'Move ' + layer.name + ' up');
+    raise.type = 'button'; raise.className = 'layer-icon'; raise.textContent = t('layers.up');
+    raise.title = t('layers.upTitle'); raise.setAttribute('aria-label', t('layers.upAria', { name: layer.name }));
     raise.disabled = i >= layers.length - 1;
     raise.onclick = (ev)=>{ ev.stopPropagation(); moveLayerUp(i); };
     const lower = document.createElement('button');
-    lower.type = 'button'; lower.className = 'layer-icon'; lower.textContent = 'Down';
-    lower.title = 'Move layer down'; lower.setAttribute('aria-label', 'Move ' + layer.name + ' down');
+    lower.type = 'button'; lower.className = 'layer-icon'; lower.textContent = t('layers.down');
+    lower.title = t('layers.downTitle'); lower.setAttribute('aria-label', t('layers.downAria', { name: layer.name }));
     lower.disabled = i <= 0;
     lower.onclick = (ev)=>{ ev.stopPropagation(); moveLayerDown(i); };
     controls.appendChild(raise);
@@ -334,7 +335,7 @@ function moveLayerUp(indexFromTop){
   layers.splice(idx,1);
   layers.splice(idx+1,0,a);
   activeLayer = a; renderLayersUI(); composite();
-  pushHistory('Move Layer Up');
+  pushHistory('history.moveLayerUp');
 }
 
 function moveLayerDown(indexFromTop){
@@ -344,7 +345,14 @@ function moveLayerDown(indexFromTop){
   layers.splice(idx,1);
   layers.splice(idx-1,0,a);
   activeLayer = a; renderLayersUI(); composite();
-  pushHistory('Move Layer Down');
+  pushHistory('history.moveLayerDown');
+}
+
+function localizeGeneratedLayerNames(){
+  layers.forEach((layer)=>{
+    if(!layer.autoName) return;
+    layer.name = t(layer.autoName.key, layer.autoName.params || {});
+  });
 }
 
 function renderFlattenedToContext(destCtx, options = {}){
@@ -477,4 +485,3 @@ function composite(){
   if(currentTextEditor) syncTextEditorAppearance(currentTextEditor);
   updateCanvasChrome();
 }
-

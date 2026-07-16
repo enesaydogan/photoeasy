@@ -72,8 +72,20 @@ window.addEventListener('keydown', (e)=>{
 window.addEventListener('keyup', (e)=>{ if(e.code === 'Space') spacePressed = false; });
 window.addEventListener('blur', ()=>{ spacePressed = false; });
 
+initI18n(document.getElementById('language-switch'));
+window.addEventListener('langchange', ()=>{
+  localizeGeneratedLayerNames();
+  document.querySelectorAll('.text-editor-meta').forEach((element)=>{ element.textContent = t('text.editorMeta'); });
+  renderLayersUI();
+  renderToolProps();
+  renderHistoryPanel();
+  updateToolHint();
+  applyTooltips();
+  updateCanvasChrome();
+});
+
 // Init default - only create Background layer
-createLayer('Background', { historyLabel: 'Create Background', role: 'background' });
+createLayer(t('layer.background'), { historyLabel: 'history.createBackground', role: 'background', autoName: { key:'layer.background' } });
 setupViewportControls();
 window.addEventListener('resize', () => { resizePreviewCanvas(); composite(); });
 resizePreviewCanvas();
@@ -87,4 +99,3 @@ window.requestAnimationFrame(()=>{
   composite();
   updateCanvasChrome();
 });
-

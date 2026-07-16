@@ -77,56 +77,16 @@ cursorPreview.className = 'cursor-preview';
 viewport.appendChild(cursorPreview);
 
 const TOOL_META = {
-  move: {
-    label: 'Move',
-    shortcut: 'V',
-    hint: 'Move: drag a layer. Alt+drag duplicates it; Space+drag or middle-mouse pans the view.'
-  },
-  brush: {
-    label: 'Brush',
-    shortcut: 'B',
-    hint: 'Brush: paint on the active layer. The ring shows your brush size.'
-  },
-  eraser: {
-    label: 'Eraser',
-    shortcut: 'E',
-    hint: 'Eraser: remove pixels on the active layer. Locked layers stay protected.'
-  },
-  fill: {
-    label: 'Fill',
-    shortcut: null,
-    hint: 'Fill: click an area to flood fill it on the active layer.'
-  },
-  crop: {
-    label: 'Crop',
-    shortcut: null,
-    hint: 'Crop: drag a crop area, then commit or cancel. Undo restores the previous canvas.'
-  },
-  select: {
-    label: 'Select',
-    shortcut: null,
-    hint: 'Select: drag a rectangle to lift pixels into a new layer.'
-  },
-  magic: {
-    label: 'Magic Wand',
-    shortcut: null,
-    hint: 'Magic Wand: click to build a visibility mask from matching composite pixels.'
-  },
-  transform: {
-    label: 'Transform',
-    shortcut: null,
-    hint: 'Transform: drag inside to move, corners to scale, and the top handle to rotate.'
-  },
-  zoom: {
-    label: 'Zoom',
-    shortcut: 'Z',
-    hint: 'Zoom: click to zoom in, Alt+click to zoom out, or press Ctrl+0 to fit the view.'
-  },
-  text: {
-    label: 'Text',
-    shortcut: 'T',
-    hint: 'Text: click to create, click existing text to edit, Ctrl+Enter to commit.'
-  }
+  move: { labelKey: 'tool.move', shortcut: 'V', hintKey: 'hint.move' },
+  brush: { labelKey: 'tool.brush', shortcut: 'B', hintKey: 'hint.brush' },
+  eraser: { labelKey: 'tool.eraser', shortcut: 'E', hintKey: 'hint.eraser' },
+  fill: { labelKey: 'tool.fill', shortcut: null, hintKey: 'hint.fill' },
+  crop: { labelKey: 'tool.crop', shortcut: null, hintKey: 'hint.crop' },
+  select: { labelKey: 'tool.select', shortcut: null, hintKey: 'hint.select' },
+  magic: { labelKey: 'tool.magic', shortcut: null, hintKey: 'hint.magic' },
+  transform: { labelKey: 'tool.transform', shortcut: null, hintKey: 'hint.transform' },
+  zoom: { labelKey: 'tool.zoom', shortcut: 'Z', hintKey: 'hint.zoom' },
+  text: { labelKey: 'tool.text', shortcut: 'T', hintKey: 'hint.text' }
 };
 
 function isPointInsideDocument(pos){
@@ -142,18 +102,18 @@ function clampPointToDocument(pos){
 
 function validateCanvasSize(nextWidth, nextHeight, layerCount = Math.max(1, layers.length)){
   if(!Number.isInteger(nextWidth) || !Number.isInteger(nextHeight) || nextWidth <= 0 || nextHeight <= 0){
-    return 'Please enter valid canvas dimensions.';
+    return t('status.validDimensions');
   }
   if(nextWidth > MAX_CANVAS_DIMENSION || nextHeight > MAX_CANVAS_DIMENSION){
-    return 'Canvas sides cannot exceed ' + MAX_CANVAS_DIMENSION.toLocaleString() + ' px.';
+    return t('status.maxSide', { max: MAX_CANVAS_DIMENSION.toLocaleString(currentLang()) });
   }
   const pixels = nextWidth * nextHeight;
   if(!Number.isSafeInteger(pixels) || pixels > MAX_CANVAS_PIXELS){
-    return 'Canvas area cannot exceed ' + MAX_CANVAS_PIXELS.toLocaleString() + ' pixels.';
+    return t('status.maxArea', { max: MAX_CANVAS_PIXELS.toLocaleString(currentLang()) });
   }
   const estimatedBytes = pixels * 4 * Math.max(2, layerCount + 1);
   if(estimatedBytes > 512 * 1024 * 1024){
-    return 'This size would require too much working memory for the current layer stack.';
+    return t('status.memoryLimit');
   }
   return null;
 }
@@ -188,32 +148,29 @@ function updateOnboarding(){
 function updateToolHint(){
   if(!toolHintEl) return;
   if(currentTextEditor){
-    toolHintEl.textContent = 'Text: click inside the bounds to edit, Ctrl+Enter to commit, Esc to cancel.';
+    toolHintEl.textContent = t('hint.textEditing');
     return;
   }
   if(cropPending){
-    toolHintEl.textContent = 'Crop: review the pending crop, then commit or cancel. Undo restores the previous canvas.';
+    toolHintEl.textContent = t('hint.cropPending');
     return;
   }
-  const meta = TOOL_META[tool] || { hint: 'Choose a tool to start editing.' };
-  toolHintEl.textContent = meta.hint;
+  const meta = TOOL_META[tool];
+  toolHintEl.textContent = meta ? t(meta.hintKey) : t('hint.chooseTool');
 }
 
 function updateHistoryLabel(){
   if(!historyLabelEl) return;
   const currentLabel = history[historyIndex]?.label;
-  if(historyIndex <= 0 || !currentLabel || (currentLabel === 'Create Background' && layers.length <= 1)){
-    historyLabelEl.textContent = 'Undo ready';
+  if(historyIndex <= 0 || !currentLabel || (currentLabel === 'history.createBackground' && layers.length <= 1)){
+    historyLabelEl.textContent = t('history.undoReady');
     return;
   }
-  historyLabelEl.textContent = 'Undo: ' + currentLabel;
+  historyLabelEl.textContent = t('history.undoLabel', { action: getHistoryDisplayLabel(history[historyIndex], historyIndex) });
 }
 
 function getHistoryDisplayLabel(snapshot, idx){
-  const label = snapshot?.label || 'Edit';
-  if(idx === 0 && label === 'Blank Document') return 'Blank Document';
-  if(label === 'Create Background') return 'Canvas Ready';
-  return label;
+  return t(snapshot?.label || 'history.edit');
 }
 
 function renderHistoryPanel(){
@@ -243,13 +200,13 @@ function renderHistoryPanel(){
     if(idx === historyIndex){
       const current = document.createElement('span');
       current.className = 'history-entry-current';
-      current.textContent = 'Current';
+      current.textContent = t('history.current');
       entry.appendChild(current);
       entry.setAttribute('aria-current', 'step');
     } else {
       entry.onclick = async ()=>{
         await restoreHistory(idx);
-        addStatus('Restored ' + getHistoryDisplayLabel(snapshot, idx) + '.', 'info', 1800);
+        addStatus(t('history.restored', { action: getHistoryDisplayLabel(snapshot, idx) }), 'info', 1800);
       };
     }
     historyListEl.appendChild(entry);
@@ -314,31 +271,36 @@ function commitLayerRename(index, nextName){
   }
   if(trimmedName !== layer.name){
     layer.name = trimmedName;
-    pushHistory('Rename Layer');
-    addStatus('Layer renamed.', 'info', 1800);
+    layer.autoName = null;
+    pushHistory('history.renameLayer');
+    addStatus(t('status.layerRenamed'), 'info', 1800);
   }
   renderLayersUI();
 }
 
 function applyTooltips(){
+  document.querySelectorAll('[data-tool-key]').forEach((element)=>{
+    const meta = TOOL_META[element.dataset.toolKey];
+    if(!meta) return;
+    const label = t(meta.labelKey);
+    const title = meta.shortcut ? label + ' (' + meta.shortcut + ')' : label;
+    element.title = title;
+    element.setAttribute('aria-label', title);
+  });
   const mapping = {
-    'tool-move': TOOL_META.move,
-    'tool-brush': TOOL_META.brush,
-    'tool-eraser': TOOL_META.eraser,
-    'tool-text': TOOL_META.text,
-    'tool-zoom': TOOL_META.zoom,
-    'zoom-fit': { label: 'Fit View', shortcut: 'Ctrl+0' },
-    'zoom-100': { label: 'Actual Size', shortcut: null },
-    'zoom-in': { label: 'Zoom In', shortcut: null },
-    'zoom-out': { label: 'Zoom Out', shortcut: null },
-    'dup-layer': { label: 'Duplicate Layer', shortcut: 'Ctrl+J' },
-    undo: { label: 'Undo', shortcut: 'Ctrl+Z' },
-    redo: { label: 'Redo', shortcut: 'Ctrl+Shift+Z' }
+    'zoom-fit': { labelKey: 'props.fitView', shortcut: 'Ctrl+0' },
+    'zoom-100': { labelKey: 'header.actual', shortcut: null },
+    'zoom-in': { labelKey: 'header.zoomIn', shortcut: null },
+    'zoom-out': { labelKey: 'header.zoomOut', shortcut: null },
+    'dup-layer': { labelKey: 'layers.duplicate', shortcut: 'Ctrl+J' },
+    undo: { labelKey: 'header.undo', shortcut: 'Ctrl+Z' },
+    redo: { labelKey: 'header.redo', shortcut: 'Ctrl+Shift+Z' }
   };
   Object.entries(mapping).forEach(([id, meta])=>{
     const el = document.getElementById(id);
     if(!el) return;
-    const title = meta.shortcut ? meta.label + ' (' + meta.shortcut + ')' : meta.label;
+    const label = t(meta.labelKey);
+    const title = meta.shortcut ? label + ' (' + meta.shortcut + ')' : label;
     el.title = title;
     el.setAttribute('aria-label', title);
   });
@@ -347,7 +309,7 @@ function applyTooltips(){
 function fitView(showToast = false){
   resetViewportTransform();
   composite();
-  if(showToast) addStatus('View fit to window.', 'info');
+  if(showToast) addStatus(t('status.viewFit'), 'info');
 }
 
 function setActualSize(showToast = false){
@@ -356,7 +318,7 @@ function setActualSize(showToast = false){
   viewportTransform.offsetX = 0;
   viewportTransform.offsetY = 0;
   composite();
-  if(showToast) addStatus('View set to 100%.', 'info');
+  if(showToast) addStatus(t('status.viewActual'), 'info');
 }
 
 function clearLayerDragState(){
@@ -377,8 +339,8 @@ function reorderLayer(fromIndex, targetIndex, placeAfter){
   activeLayer = moved;
   renderLayersUI();
   composite();
-  pushHistory('Reorder Layers');
-  addStatus('Layer order updated. Undo restores the previous order.', 'info');
+  pushHistory('history.reorderLayers');
+  addStatus(t('status.layerOrder'), 'info');
 }
 
 function updateCursorFeedback(clientX, clientY){
@@ -494,4 +456,3 @@ function zoomViewport(nextScale, anchorX = view.width / 2, anchorY = view.height
 }
 
 updateViewportAspect();
-

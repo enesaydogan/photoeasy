@@ -679,6 +679,30 @@ button:disabled{background:var(--surface);border-color:var(--line-soft);color:va
 
 .zoom-controls button:hover{background:rgba(236,238,241,.05);border-color:transparent;transform:none}
 .zoom-readout{min-width:54px;padding:0 6px;color:var(--faint);font:500 11.5px/1 ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;letter-spacing:.04em}
+.language-switch{
+  display:inline-flex;
+  align-items:center;
+  flex:0 0 auto;
+  height:34px;
+  padding:2px;
+  border:1px solid var(--line);
+  border-radius:9px;
+  background:var(--surface);
+}
+.language-switch button{
+  min-width:34px;
+  min-height:28px;
+  padding:0 8px;
+  border-color:transparent;
+  border-radius:6px;
+  background:transparent;
+  color:var(--faint);
+  font:600 10px/1 ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  letter-spacing:.08em;
+  box-shadow:none;
+}
+.language-switch button:hover{background:rgba(236,238,241,.05);border-color:transparent;color:var(--ink);transform:none}
+.language-switch button.is-active{background:#1b1e21;border-color:var(--line);color:var(--ink)}
 .tool-header-controls{margin-left:auto}
 
 .canvas-size{

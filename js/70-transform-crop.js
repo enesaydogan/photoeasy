@@ -6,11 +6,11 @@ function doTransform(){
     return;
   }
   if(!activeLayer){
-    addStatus('Select a layer before transforming.', 'warning');
+    addStatus(t('status.transformSelect'), 'warning');
     return;
   }
   if(activeLayer.locked){
-    addStatus('Layer is locked. Unlock it to transform.', 'warning', 2800);
+    addStatus(t('status.transformLocked'), 'warning', 2800);
     return;
   }
   // commit any active text edits before entering transform
@@ -83,7 +83,7 @@ function cancelTransform(showToast = true){
   transformState = null;
   window.removeEventListener('keydown', transformKeyHandler);
   composite(); renderToolProps();
-  if(showToast) addStatus('Transform canceled.', 'info', 1600);
+  if(showToast) addStatus(t('status.transformCanceled'), 'info', 1600);
 }
 
 function commitTransform(){
@@ -125,7 +125,7 @@ function commitTransform(){
     l.type = null; l.text = null; l.font = null; l.color = null; l.fontSize = null; l.fontFamily = null; l.bold = false;
   }
   transformState = null; window.removeEventListener('keydown', transformKeyHandler);
-  pushHistory('Transform Layer'); renderLayersUI(); composite(); renderToolProps(); addStatus('Transform applied.', 'info', 1800);
+  pushHistory('history.transformLayer'); renderLayersUI(); composite(); renderToolProps(); addStatus(t('status.transformApplied'), 'info', 1800);
 }
 
 // Crop commit/cancel helpers
@@ -167,14 +167,13 @@ function commitCrop(){
     width = sw; height = sh; try{ updateViewportAspect(); }catch(e){}
     try{ updateCanvasSizeDisplay(); }catch(e){}
     resetViewportTransform();
-    renderLayersUI(); composite(); pushHistory('Crop Canvas');
-    addStatus('Canvas cropped. Undo restores the previous framing.', 'warning', 3200);
+    renderLayersUI(); composite(); pushHistory('history.cropCanvas');
+    addStatus(t('status.cropApplied'), 'warning', 3200);
   }
   selection = null; cropPending = false; renderToolProps();
 }
 
 function cancelCrop(){
   const selDiv = document.getElementById('sel-rect'); if(selDiv) selDiv.remove();
-  selection = null; cropPending = false; renderToolProps(); addStatus('Crop canceled.', 'info', 1600);
+  selection = null; cropPending = false; renderToolProps(); addStatus(t('status.cropCanceled'), 'info', 1600);
 }
-
