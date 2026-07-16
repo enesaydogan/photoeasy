@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PhotoEasy — Browser Photo Editor</title>
   <link rel="icon" href="favicon.png" type="image/png">
-  <link rel="stylesheet" href="styles.css?v=20260716-10">
+  <link rel="stylesheet" href="styles.css?v=20260716-11">
   <script>
     // Stored theme is applied before first paint so the editor never flashes.
     // Storage throws on file:// and in private mode; the system theme is a fine
@@ -138,10 +138,18 @@
       <div id="layers-panel" class="layers-panel sidebar-panel">
         <div class="layers-header">
           <div class="layers-title" data-i18n="sidebar.layers">Layers</div>
+          <!-- Icon-only: data-i18n would overwrite textContent and wipe the SVG,
+               so these label through title/aria-label instead. -->
           <div class="layers-header-top">
-          <button id="add-layer" data-i18n="layers.add">Add Layer</button>
-          <button id="dup-layer" data-i18n="layers.duplicate">Duplicate Layer</button>
-          <button id="del-layer" data-i18n="layers.remove">Remove Layer</button>
+            <button id="add-layer" class="icon-btn" type="button" title="Add Layer" data-i18n-title="layers.add" data-i18n-aria="layers.add">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button id="dup-layer" class="icon-btn" type="button" title="Duplicate Layer" data-i18n-title="layers.duplicate" data-i18n-aria="layers.duplicate">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/></svg>
+            </button>
+            <button id="del-layer" class="icon-btn is-danger" type="button" title="Remove Layer" data-i18n-title="layers.remove" data-i18n-aria="layers.remove">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3"/></svg>
+            </button>
           </div>
         </div>
         <ul id="layers-list"></ul>
@@ -181,16 +189,17 @@
     </div>
   </div>
   
-  <script defer src="js/00-i18n.js?v=20260716-10"></script>
-  <script defer src="js/00-theme.js?v=20260716-10"></script>
-  <script defer src="js/00-core.js?v=20260716-10"></script>
-  <script defer src="js/10-history.js?v=20260716-10"></script>
-  <script defer src="js/20-layers-compositor.js?v=20260716-10"></script>
-  <script defer src="js/30-editor-input.js?v=20260716-10"></script>
-  <script defer src="js/40-tools-ui.js?v=20260716-10"></script>
-  <script defer src="js/50-fill.js?v=20260716-10"></script>
-  <script defer src="js/60-document-io.js?v=20260716-10"></script>
-  <script defer src="js/70-transform-crop.js?v=20260716-10"></script>
-  <script defer src="js/80-viewport-init.js?v=20260716-10"></script>
+  <script defer src="js/00-i18n.js?v=20260716-11"></script>
+  <script defer src="js/00-icons.js?v=20260716-11"></script>
+  <script defer src="js/00-theme.js?v=20260716-11"></script>
+  <script defer src="js/00-core.js?v=20260716-11"></script>
+  <script defer src="js/10-history.js?v=20260716-11"></script>
+  <script defer src="js/20-layers-compositor.js?v=20260716-11"></script>
+  <script defer src="js/30-editor-input.js?v=20260716-11"></script>
+  <script defer src="js/40-tools-ui.js?v=20260716-11"></script>
+  <script defer src="js/50-fill.js?v=20260716-11"></script>
+  <script defer src="js/60-document-io.js?v=20260716-11"></script>
+  <script defer src="js/70-transform-crop.js?v=20260716-11"></script>
+  <script defer src="js/80-viewport-init.js?v=20260716-11"></script>
 </body>
 </html>

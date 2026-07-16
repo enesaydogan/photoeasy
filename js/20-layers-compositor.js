@@ -186,105 +186,81 @@ function renderLayersUI(){
     opacity.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
     opacity.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
 
-    const controls = document.createElement('div'); controls.className='layer-controls';
-    const dragHandle = document.createElement('button');
-    dragHandle.type = 'button';
-    dragHandle.className = 'layer-icon layer-grip';
-    dragHandle.title = t('layers.dragTitle');
-    dragHandle.setAttribute('aria-label', t('layers.dragAria', { name: layer.name }));
-    dragHandle.textContent = '::';
-    dragHandle.onclick = (ev)=> ev.stopPropagation();
-    const vis = document.createElement('button');
-    vis.type = 'button';
-    vis.className = 'layer-icon';
-    vis.title = layer.visible ? t('layers.hideTitle') : t('layers.showTitle');
-    vis.textContent = layer.visible ? t('layers.hide') : t('layers.show');
-    vis.onclick = (ev)=>{ ev.stopPropagation(); layer.visible = !layer.visible; composite(); renderLayersUI(); pushHistory(layer.visible ? 'history.showLayer' : 'history.hideLayer'); };
-
-    const meta = document.createElement('div'); meta.className = 'layer-meta';
-    // Name on top (title style) to avoid layout breaks from long names
-    const headerRow = document.createElement('div');
-    headerRow.className = 'layer-header-row';
-    if(nameNode.classList.contains('layer-name')){
-      nameNode.style.whiteSpace = 'nowrap';
-      nameNode.style.overflow = 'hidden';
-      nameNode.style.textOverflow = 'ellipsis';
-      nameNode.style.width = '100%';
-    }
-    headerRow.appendChild(nameNode);
+    // Card layout is three flat rows: identity, settings, actions. Everything
+    // that acts on the layer lives in the one action bar rather than being
+    // scattered through nested wrappers.
+    const head = document.createElement('div'); head.className = 'layer-head';
+    head.appendChild(thumb);
+    const headText = document.createElement('div'); headText.className = 'layer-head-text';
+    headText.appendChild(nameNode);
     if(layer === activeLayer){
       const activeBadge = document.createElement('span');
       activeBadge.className = 'layer-badge';
       activeBadge.textContent = t('layers.active');
-      headerRow.appendChild(activeBadge);
+      headText.appendChild(activeBadge);
     }
-    meta.appendChild(headerRow);
+    head.appendChild(headText);
 
-    const midRow = document.createElement('div'); midRow.className = 'layer-mid-row';
-    midRow.appendChild(thumb);
-    const controlWrap = document.createElement('div'); controlWrap.className = 'layer-control-wrap';
     const opRow = document.createElement('div'); opRow.className = 'layer-op-row';
-    opRow.appendChild(opacity);
-    opRow.appendChild(opVal);
-    controlWrap.appendChild(opRow);
-    // blend mode selector
-    const blendRow = document.createElement('div'); blendRow.className = 'layer-blend-row';
-    const blendLabel = document.createElement('div'); blendLabel.className='prop-title'; blendLabel.textContent=t('layers.blend');
-    const blendSel = document.createElement('select'); ['source-over','multiply','screen','overlay','darken','lighten'].forEach(b=>{ const o=document.createElement('option'); o.value=b; o.textContent=t('blend.' + b); if((layer.blend||'source-over')===b) o.selected=true; blendSel.appendChild(o); });
+    // blend mode selector — labelled by aria only; the chosen mode is its own label
+    const blendSel = document.createElement('select'); blendSel.className = 'layer-blend';
+    ['source-over','multiply','screen','overlay','darken','lighten'].forEach(b=>{ const o=document.createElement('option'); o.value=b; o.textContent=t('blend.' + b); if((layer.blend||'source-over')===b) o.selected=true; blendSel.appendChild(o); });
     blendSel.setAttribute('aria-label', t('layers.blendAria', { name: layer.name }));
     blendSel.onchange = (e)=>{ layer.blend = e.target.value; composite(); pushHistory('history.blendMode'); };
     // prevent the select from bubbling (keeps the dropdown open while interacting)
     blendSel.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
     blendSel.addEventListener('mousedown', (ev)=>{ ev.stopPropagation(); });
     blendSel.addEventListener('click', (ev)=>{ ev.stopPropagation(); });
-    blendRow.appendChild(blendLabel); blendRow.appendChild(blendSel); controlWrap.appendChild(blendRow);
-    midRow.appendChild(controlWrap);
-    meta.appendChild(midRow);
+    opRow.appendChild(opacity);
+    opRow.appendChild(opVal);
+    opRow.appendChild(blendSel);
 
-    // place lock and mask buttons in a single control row (lock left, mask right)
-    const controlRow = document.createElement('div'); controlRow.className = 'layer-control-row';
-    const leftControls = document.createElement('div'); leftControls.className = 'layer-control-left';
-    const rightControls = document.createElement('div'); rightControls.className = 'layer-control-right';
+    const actions = document.createElement('div'); actions.className = 'layer-actions';
 
-    // Lock button (left)
-    const lockBtn = document.createElement('button');
-    lockBtn.type = 'button';
-    lockBtn.className = 'layer-icon lock-btn';
-    lockBtn.textContent = layer.locked ? t('layers.unlock') : t('layers.lock');
-    lockBtn.title = layer.locked ? t('layers.unlockTitle') : t('layers.lockTitle');
+    const vis = iconButton(layer.visible ? 'eye' : 'eyeOff', {
+      className: layer.visible ? '' : 'is-off',
+      title: layer.visible ? t('layers.hideTitle') : t('layers.showTitle')
+    });
+    vis.onclick = (ev)=>{ ev.stopPropagation(); layer.visible = !layer.visible; composite(); renderLayersUI(); pushHistory(layer.visible ? 'history.showLayer' : 'history.hideLayer'); };
+
+    const lockBtn = iconButton(layer.locked ? 'lock' : 'unlock', {
+      className: layer.locked ? 'is-on' : '',
+      title: layer.locked ? t('layers.unlockTitle') : t('layers.lockTitle')
+    });
     lockBtn.onclick = (ev) => {
       ev.stopPropagation();
       layer.locked = !layer.locked;
       renderLayersUI();
       pushHistory(layer.locked ? 'history.lockLayer' : 'history.unlockLayer');
     };
-    leftControls.appendChild(lockBtn);
 
-    // Mask button (right)
-    const maskBtn = document.createElement('button'); maskBtn.type = 'button'; maskBtn.className='mask-btn'; maskBtn.textContent = layer.maskCanvas? t('layers.removeMask') : t('layers.addMask');
+    const maskBtn = iconButton('mask', {
+      className: layer.maskCanvas ? 'is-on' : '',
+      title: layer.maskCanvas ? t('layers.removeMask') : t('layers.addMask')
+    });
     maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; if(layer === activeLayer) editMaskMode = false; addStatus(t('status.maskRemoved'), 'warning', 3200); pushHistory('history.removeMask'); } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; pushHistory('history.addMask'); addStatus(t('status.maskAdded', { name: layer.name }), 'info', 1800); } renderLayersUI(); composite(); renderToolProps(); };
-    rightControls.appendChild(maskBtn);
 
-    controlRow.appendChild(leftControls);
-    controlRow.appendChild(rightControls);
-    meta.appendChild(controlRow);
-
-    row.appendChild(meta);
-    row.appendChild(controls);
-    controls.appendChild(vis);
-    const raise = document.createElement('button');
-    raise.type = 'button'; raise.className = 'layer-icon'; raise.textContent = t('layers.up');
-    raise.title = t('layers.upTitle'); raise.setAttribute('aria-label', t('layers.upAria', { name: layer.name }));
+    const raise = iconButton('up', { title: t('layers.upTitle'), ariaLabel: t('layers.upAria', { name: layer.name }) });
     raise.disabled = i >= layers.length - 1;
     raise.onclick = (ev)=>{ ev.stopPropagation(); moveLayerUp(i); };
-    const lower = document.createElement('button');
-    lower.type = 'button'; lower.className = 'layer-icon'; lower.textContent = t('layers.down');
-    lower.title = t('layers.downTitle'); lower.setAttribute('aria-label', t('layers.downAria', { name: layer.name }));
+
+    const lower = iconButton('down', { title: t('layers.downTitle'), ariaLabel: t('layers.downAria', { name: layer.name }) });
     lower.disabled = i <= 0;
     lower.onclick = (ev)=>{ ev.stopPropagation(); moveLayerDown(i); };
-    controls.appendChild(raise);
-    controls.appendChild(lower);
-    controls.appendChild(dragHandle);
+
+    const dragHandle = iconButton('grip', {
+      className: 'layer-grip',
+      title: t('layers.dragTitle'),
+      ariaLabel: t('layers.dragAria', { name: layer.name })
+    });
+    dragHandle.onclick = (ev)=> ev.stopPropagation();
+
+    const actionSpacer = document.createElement('div'); actionSpacer.className = 'layer-actions-spacer';
+    [vis, lockBtn, maskBtn, actionSpacer, raise, lower, dragHandle].forEach((node)=> actions.appendChild(node));
+
+    row.appendChild(head);
+    row.appendChild(opRow);
+    row.appendChild(actions);
 
     // Row selection behavior
     row.classList.add('layer-row');

@@ -189,6 +189,61 @@ button:disabled:hover {
   transform: none;
 }
 
+/* ── icon buttons ────────────────────────────── */
+/* Square, label-less, and quiet until hovered — used by the layer panel header
+   and each layer card's action bar. */
+.icon-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.icon-btn:hover {
+  background: var(--tint-1);
+  border-color: var(--line);
+  color: var(--ink);
+  transform: none;
+}
+
+.icon-btn:disabled,
+.icon-btn:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+  color: var(--faint);
+  opacity: .35;
+}
+
+/* State: the control is engaged (locked, masked). */
+.icon-btn.is-on {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* State: the layer is hidden — the icon should read as switched off. */
+.icon-btn.is-off {
+  color: var(--faint);
+}
+
+.icon-btn.is-danger:hover {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+}
+
 /* ── toolbar ─────────────────────────────────── */
 .toolbar {
   position: relative;
@@ -706,30 +761,22 @@ button:disabled:hover {
   overflow: hidden;
 }
 
+/* Title and its actions share one line: the icons made the old stacked button
+   grid unnecessary, and the labels no longer have to fit a 3-column grid. */
 .layers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 10px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .layers-header-top {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.layers-header-top button {
-  width: 100%;
-  min-width: 0;
-  height: 30px;
-  min-height: 30px;
-  padding: 0 4px;
-  border-radius: 7px;
-  /* Sized to hold the longest Turkish label ("Katmanı Çoğalt") on one line. */
-  font-size: 10.5px;
-  letter-spacing: -.01em;
-  white-space: nowrap;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 #layers-list {
@@ -756,12 +803,12 @@ button:disabled:hover {
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+/* Three flat rows: identity, settings, actions. */
 .layer-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px;
   border: 1px solid var(--line-soft);
   border-radius: 10px;
   background: transparent;
@@ -787,15 +834,15 @@ button:disabled:hover {
   object-fit: cover;
 }
 
-.layer-meta {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-  gap: 8px;
+/* row 1 — identity */
+.layer-head {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
 }
 
-.layer-header-row {
+.layer-head-text {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -804,10 +851,7 @@ button:disabled:hover {
 }
 
 .layer-name {
-  display: block;
-  flex: 1;
   min-width: 0;
-  padding-right: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -816,101 +860,35 @@ button:disabled:hover {
   font-weight: 500;
 }
 
+/* row 2 — settings. The blend column is fixed rather than auto so a long mode
+   name ("Kaplama") cannot squeeze the opacity slider. */
+.layer-op-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 84px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .layer-opacity-value {
-  min-width: 36px;
+  min-width: 34px;
   text-align: right;
   color: var(--faint);
   font: 500 11.5px/1 var(--mono);
 }
 
-.layer-controls {
+/* row 3 — actions */
+.layer-actions {
   display: flex;
-  flex-direction: column;
-  flex: 0 0 auto;
-  align-items: stretch;
-  gap: 8px;
+  align-items: center;
+  gap: 3px;
 }
 
-.layer-control-wrap {
-  display: flex;
-  flex-direction: column;
+.layer-actions-spacer {
   flex: 1;
-  min-width: 0;
-}
-
-.layer-mid-row {
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-}
-
-.layer-op-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-
-.layer-blend-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.layer-mask-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
-}
-
-.layer-control-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 8px;
-}
-
-.layer-control-left,
-.layer-control-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.layer-icon,
-.lock-btn,
-.mask-btn {
-  min-width: 0;
-  min-height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.layer-icon:hover,
-.lock-btn:hover,
-.mask-btn:hover {
-  background: var(--tint-1);
-  border-color: var(--muted);
-  color: var(--ink);
-  transform: none;
 }
 
 .layer-grip {
-  min-width: 34px;
-  color: var(--faint);
-  font-size: 15px;
   cursor: grab;
 }
 
@@ -918,18 +896,8 @@ button:disabled:hover {
   cursor: grabbing;
 }
 
-.layer-controls .small[disabled] {
-  opacity: .5;
-  cursor: not-allowed;
-}
-
-.layer-opacity {
-  width: 90px;
-}
-
 /* ── inputs ──────────────────────────────────── */
-.layer-blend-row select,
-.layer-controls select,
+.layer-blend,
 .tool-props input[type="number"],
 .tool-props select,
 .layer-name-input,
@@ -946,7 +914,7 @@ button:disabled:hover {
   font-size: 12px;
 }
 
-.layer-blend-row select,
+.layer-blend,
 .tool-props select {
   -webkit-appearance: none;
   appearance: none;
@@ -957,13 +925,13 @@ button:disabled:hover {
   cursor: pointer;
 }
 
-:root[data-theme="dark"] .layer-blend-row select,
+:root[data-theme="dark"] .layer-blend,
 :root[data-theme="dark"] .tool-props select {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='12' height='12'><path d='M7 10l5 5 5-5' fill='none' stroke='%239098a2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .layer-blend-row select,
+  :root:not([data-theme="light"]) .layer-blend,
   :root:not([data-theme="light"]) .tool-props select {
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='12' height='12'><path d='M7 10l5 5 5-5' fill='none' stroke='%239098a2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   }
@@ -974,7 +942,7 @@ button:disabled:hover {
 .tool-props select:focus,
 .cp-hex:focus,
 .form-group input[type="number"]:focus,
-.layer-blend-row select:focus {
+.layer-blend:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
@@ -1457,17 +1425,6 @@ input[type="range"]::-moz-range-track {
 }
 
 /* ── responsive ──────────────────────────────── */
-@media (max-width: 1380px) {
-  .layer-row {
-    grid-template-columns: 1fr;
-  }
-
-  .layer-controls {
-    flex-direction: row;
-    justify-content: flex-end;
-  }
-}
-
 @media (max-width: 1100px) {
   .toolbar {
     height: auto;
@@ -1672,7 +1629,7 @@ input[type="range"]::-moz-range-track {
     border-radius: 12px;
   }
 
-  .layer-mid-row {
+  .layer-head {
     grid-template-columns: 48px minmax(0, 1fr);
   }
 
