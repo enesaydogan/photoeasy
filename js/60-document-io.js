@@ -1,5 +1,9 @@
 // Document controls, resize, import, and export.
+const projectFileInput = document.getElementById('project-file-input');
 fileInput.addEventListener('change', handleFile);
+projectFileInput.addEventListener('change', handleProjectFile);
+document.getElementById('save-project').addEventListener('click', saveProject);
+document.getElementById('open-project').addEventListener('click', ()=> projectFileInput.click());
 document.getElementById('export').addEventListener('click', exportPNG);
 document.getElementById('import-image').addEventListener('click', ()=> fileInput.click());
 document.getElementById('resize-canvas').addEventListener('click', resizeCanvas);
@@ -159,52 +163,207 @@ function confirmResize() {
   closeResizeModal();
 }
 
-function handleFile(e){
-  const f = e.target.files[0]; if(!f) return;
-  const objectUrl = URL.createObjectURL(f);
-  const img = new Image(); img.onload = ()=>{
+async function decodeImageFile(file){
+  const objectUrl = URL.createObjectURL(file);
+  try{
+    return await new Promise((resolve, reject)=>{
+      const image = new Image();
+      image.onload = ()=> resolve(image);
+      image.onerror = ()=> reject(new Error(t('status.imageOpenFailed')));
+      image.src = objectUrl;
+    });
+  }finally{
     URL.revokeObjectURL(objectUrl);
-    fileInput.value = '';
-    // If user requested, resize the canvas to the imported image size first
-    const resizeCheckbox = document.getElementById('import-resize');
-    const resizeToImage = resizeCheckbox && resizeCheckbox.checked;
-    if(resizeToImage){
-      const newWidth = img.width; const newHeight = img.height;
-      const validationError = validateCanvasSize(newWidth, newHeight);
-      if(validationError){ addStatus(validationError, 'warning', 3400); return; }
-      try{ resizeDocumentTo(newWidth, newHeight); }
-      catch(error){ addStatus(error.message || t('status.imageTooLarge'), 'warning', 3400); return; }
-      // Reset viewport transform so the view refits after resizing
-      resetViewportTransform();
-    }
-
-    // Create imported layer and draw the image. If we resized canvas to image dimensions, draw at native size.
-    createLayer(t('layer.imported'), { skipHistory: true, autoName: { key:'layer.imported' } });
-    const l = activeLayer;
-    if(resizeToImage){
-      try{ l.ctx.drawImage(img, 0, 0); } catch(e) { /* ignore */ }
-    } else {
-      // Draw image preserving aspect ratio and center it within the canvas
-      const imgW = img.width, imgH = img.height;
-      const maxW = width, maxH = height;
-      const scale = Math.min(maxW / imgW, maxH / imgH, 1);
-      const drawW = Math.round(imgW * scale);
-      const drawH = Math.round(imgH * scale);
-      const dx = Math.round((maxW - drawW) / 2);
-      const dy = Math.round((maxH - drawH) / 2);
-      try { l.ctx.drawImage(img, 0, 0, imgW, imgH, dx, dy, drawW, drawH); } catch(e) { /* ignore */ }
-    }
-    composite();
-    pushHistory('history.importImage');
-    addStatus(t('status.imageImported'), 'info', 1800);
-  };
-  img.onerror = ()=>{
-    URL.revokeObjectURL(objectUrl);
-    fileInput.value = '';
-    addStatus(t('status.imageOpenFailed'), 'warning', 3200);
-  };
-  img.src = objectUrl;
+  }
 }
+
+function getImportedLayerName(file){
+  const baseName = String(file?.name || '').replace(/\.[^.]+$/, '').trim();
+  return baseName || t('layer.imported');
+}
+
+async function importImageFile(file, options = {}){
+  if(!file || !String(file.type || '').startsWith('image/')) throw new Error(t('status.dropUnsupported'));
+  const image = await decodeImageFile(file);
+  const resizeToImage = !!options.resizeToImage;
+  if(resizeToImage){
+    const validationError = validateCanvasSize(image.width, image.height);
+    if(validationError) throw new Error(validationError);
+    resizeDocumentTo(image.width, image.height);
+    resetViewportTransform();
+  }
+
+  createLayer(getImportedLayerName(file), { skipHistory: true });
+  const layer = activeLayer;
+  if(resizeToImage){
+    layer.ctx.drawImage(image, 0, 0);
+  }else{
+    const scale = Math.min(width / image.width, height / image.height, 1);
+    const drawWidth = Math.max(1, Math.round(image.width * scale));
+    const drawHeight = Math.max(1, Math.round(image.height * scale));
+    const drawX = Math.round((width - drawWidth) / 2);
+    const drawY = Math.round((height - drawHeight) / 2);
+    layer.ctx.drawImage(image, 0, 0, image.width, image.height, drawX, drawY, drawWidth, drawHeight);
+  }
+  composite();
+  pushHistory('history.importImage');
+  addStatus(t('status.imageImported'), 'info', 1800);
+}
+
+async function handleFile(event){
+  const files = [...(event.target.files || [])];
+  fileInput.value = '';
+  if(!files.length) return;
+  const resizeToImage = !!document.getElementById('import-resize')?.checked;
+  for(let index = 0; index < files.length; index++){
+    try{ await importImageFile(files[index], { resizeToImage: resizeToImage && index === 0 }); }
+    catch(error){ addStatus(error.message || t('status.imageOpenFailed'), 'warning', 3200); }
+  }
+}
+
+function buildProjectData(){
+  return {
+    type: 'photoeasy-project',
+    version: 1,
+    width,
+    height,
+    activeIndex: layers.indexOf(activeLayer),
+    layers: layers.map((layer)=>({
+      name: layer.name,
+      autoName: layer.autoName || null,
+      dataURL: layer.canvas.toDataURL('image/png'),
+      mask: layer.maskCanvas ? layer.maskCanvas.toDataURL('image/png') : null,
+      offset: { x: layer.offset.x, y: layer.offset.y },
+      visible: layer.visible,
+      opacity: layer.opacity,
+      blend: layer.blend || 'source-over',
+      locked: !!layer.locked,
+      role: layer.role || null,
+      type: layer.type || null,
+      text: layer.text || null,
+      font: layer.font || null,
+      color: layer.color || null,
+      fontSize: layer.fontSize || null,
+      fontFamily: layer.fontFamily || null,
+      bold: !!layer.bold
+    }))
+  };
+}
+
+function saveProject(){
+  try{
+    const blob = new Blob([JSON.stringify(buildProjectData())], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.download = 'photoeasy-project.photoeasy';
+    anchor.href = url;
+    anchor.click();
+    window.setTimeout(()=> URL.revokeObjectURL(url), 1000);
+    addStatus(t('status.projectSaved'), 'info', 1800);
+  }catch(error){
+    addStatus(t('status.projectSaveFailed'), 'warning', 3200);
+  }
+}
+
+async function deserializeProjectLayer(item){
+  if(!item || typeof item.dataURL !== 'string' || !item.dataURL.startsWith('data:image/')) throw new Error(t('status.projectInvalid'));
+  const image = await loadImageFromDataURL(item.dataURL);
+  if(image.width > MAX_CANVAS_DIMENSION || image.height > MAX_CANVAS_DIMENSION || image.width * image.height > MAX_CANVAS_PIXELS) throw new Error(t('status.imageTooLarge'));
+  const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+  const ctx = canvas.getContext('2d'); ctx.drawImage(image, 0, 0);
+  let maskCanvas = null;
+  if(item.mask){
+    const maskImage = await loadImageFromDataURL(item.mask);
+    if(maskImage.width > MAX_CANVAS_DIMENSION || maskImage.height > MAX_CANVAS_DIMENSION || maskImage.width * maskImage.height > MAX_CANVAS_PIXELS) throw new Error(t('status.imageTooLarge'));
+    maskCanvas = document.createElement('canvas'); maskCanvas.width = maskImage.width; maskCanvas.height = maskImage.height;
+    maskCanvas.getContext('2d').drawImage(maskImage, 0, 0);
+  }
+  const allowedBlends = ['source-over','multiply','screen','overlay','darken','lighten'];
+  const parsedOpacity = Number(item.opacity ?? 1);
+  const parsedOffsetX = Number(item.offset?.x);
+  const parsedOffsetY = Number(item.offset?.y);
+  return {
+    canvas,
+    ctx,
+    name: String(item.name || t('layer.imported')).slice(0, 160),
+    autoName: item.autoName && typeof item.autoName.key === 'string' ? { key:item.autoName.key, params:{ ...(item.autoName.params || {}) } } : null,
+    offset: { x: Number.isFinite(parsedOffsetX) ? parsedOffsetX : 0, y: Number.isFinite(parsedOffsetY) ? parsedOffsetY : 0 },
+    visible: item.visible !== false,
+    opacity: Number.isFinite(parsedOpacity) ? Math.max(0, Math.min(1, parsedOpacity)) : 1,
+    blend: allowedBlends.includes(item.blend) ? item.blend : 'source-over',
+    maskCanvas,
+    locked: !!item.locked,
+    role: item.role === 'background' ? 'background' : null,
+    type: item.type === 'text' ? 'text' : null,
+    text: typeof item.text === 'string' ? item.text : null,
+    font: typeof item.font === 'string' ? item.font : null,
+    color: typeof item.color === 'string' ? item.color : null,
+    fontSize: Number.isFinite(Number(item.fontSize)) ? Number(item.fontSize) : null,
+    fontFamily: typeof item.fontFamily === 'string' ? item.fontFamily : null,
+    bold: !!item.bold
+  };
+}
+
+async function openProjectFile(file){
+  if(!file || file.size > 250 * 1024 * 1024) throw new Error(t('status.projectInvalid'));
+  const project = JSON.parse(await file.text());
+  if(project?.type !== 'photoeasy-project' || project.version !== 1 || !Array.isArray(project.layers) || project.layers.length > 100) throw new Error(t('status.projectInvalid'));
+  const projectWidth = Number(project.width), projectHeight = Number(project.height);
+  const validationError = validateCanvasSize(projectWidth, projectHeight, Math.max(1, project.layers.length));
+  if(validationError) throw new Error(validationError);
+  const preparedLayers = await Promise.all(project.layers.map(deserializeProjectLayer));
+  const decodedPixels = preparedLayers.reduce((sum, layer)=> sum + layer.canvas.width * layer.canvas.height + (layer.maskCanvas ? layer.maskCanvas.width * layer.maskCanvas.height : 0), 0);
+  if(decodedPixels > MAX_CANVAS_PIXELS * 4) throw new Error(t('status.memoryLimit'));
+  if(preparedLayers.some((layer)=> layer.maskCanvas && (layer.maskCanvas.width !== projectWidth || layer.maskCanvas.height !== projectHeight))) throw new Error(t('status.projectInvalid'));
+
+  historyRestoreToken += 1;
+  if(currentTextEditor){ try{ currentTextEditor.cancel(); }catch(error){ currentTextEditor = null; } }
+  transformState = null; selection = null; cropPending = false; editMaskMode = false;
+  document.getElementById('sel-rect')?.remove();
+  width = projectWidth; height = projectHeight; layers = preparedLayers;
+  localizeGeneratedLayerNames();
+  activeLayer = layers[Math.max(0, Math.min(layers.length - 1, Number(project.activeIndex) || 0))] || null;
+  history = []; historyIndex = -1; historyRestoring = false;
+  resetViewportTransform(); updateViewportAspect(); updateCanvasSizeDisplay();
+  renderLayersUI(); composite(); pushHistory('history.openProject'); renderToolProps();
+  addStatus(t('status.projectOpened'), 'info', 2000);
+}
+
+async function handleProjectFile(event){
+  const file = event.target.files?.[0];
+  projectFileInput.value = '';
+  if(!file) return;
+  try{ await openProjectFile(file); }
+  catch(error){ addStatus(error instanceof SyntaxError ? t('status.projectInvalid') : (error.message || t('status.projectOpenFailed')), 'warning', 3600); }
+}
+
+let imageDragDepth = 0;
+viewport.addEventListener('dragenter', (event)=>{
+  if(!event.dataTransfer?.types?.includes('Files')) return;
+  event.preventDefault(); imageDragDepth += 1; viewport.classList.add('is-file-drag');
+});
+viewport.addEventListener('dragover', (event)=>{
+  if(!event.dataTransfer?.types?.includes('Files')) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
+});
+viewport.addEventListener('dragleave', (event)=>{
+  imageDragDepth = Math.max(0, imageDragDepth - 1);
+  if(imageDragDepth === 0) viewport.classList.remove('is-file-drag');
+});
+window.addEventListener('dragend', ()=>{
+  imageDragDepth = 0;
+  viewport.classList.remove('is-file-drag');
+});
+viewport.addEventListener('drop', async (event)=>{
+  event.preventDefault(); imageDragDepth = 0; viewport.classList.remove('is-file-drag');
+  const files = [...(event.dataTransfer?.files || [])].filter((file)=> String(file.type || '').startsWith('image/'));
+  if(!files.length){ addStatus(t('status.dropUnsupported'), 'warning', 2600); return; }
+  const resizeToImage = !!document.getElementById('import-resize')?.checked;
+  for(let index = 0; index < files.length; index++){
+    try{ await importImageFile(files[index], { resizeToImage: resizeToImage && index === 0 }); }
+    catch(error){ addStatus(error.message || t('status.imageOpenFailed'), 'warning', 3200); }
+  }
+});
 
 function exportPNG(){
   const out = document.createElement('canvas'); out.width = width; out.height = height; const octx = out.getContext('2d');

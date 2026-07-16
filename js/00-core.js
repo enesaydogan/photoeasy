@@ -70,7 +70,7 @@ let historyRestoring = false;
 const MAX_CANVAS_DIMENSION = 16384;
 const MAX_CANVAS_PIXELS = 40_000_000;
 const MAX_HISTORY_STEPS = 24;
-const MAX_HISTORY_CHARS = 120_000_000;
+const MAX_HISTORY_BYTES = 240_000_000;
 
 const cursorPreview = document.createElement('div');
 cursorPreview.className = 'cursor-preview';
@@ -80,11 +80,11 @@ const TOOL_META = {
   move: { labelKey: 'tool.move', shortcut: 'V', hintKey: 'hint.move' },
   brush: { labelKey: 'tool.brush', shortcut: 'B', hintKey: 'hint.brush' },
   eraser: { labelKey: 'tool.eraser', shortcut: 'E', hintKey: 'hint.eraser' },
-  fill: { labelKey: 'tool.fill', shortcut: null, hintKey: 'hint.fill' },
-  crop: { labelKey: 'tool.crop', shortcut: null, hintKey: 'hint.crop' },
-  select: { labelKey: 'tool.select', shortcut: null, hintKey: 'hint.select' },
-  magic: { labelKey: 'tool.magic', shortcut: null, hintKey: 'hint.magic' },
-  transform: { labelKey: 'tool.transform', shortcut: null, hintKey: 'hint.transform' },
+  fill: { labelKey: 'tool.fill', shortcut: 'F', hintKey: 'hint.fill' },
+  crop: { labelKey: 'tool.crop', shortcut: 'C', hintKey: 'hint.crop' },
+  select: { labelKey: 'tool.select', shortcut: 'M', hintKey: 'hint.select' },
+  magic: { labelKey: 'tool.magic', shortcut: 'W', hintKey: 'hint.magic' },
+  transform: { labelKey: 'tool.transform', shortcut: 'R', hintKey: 'hint.transform' },
   zoom: { labelKey: 'tool.zoom', shortcut: 'Z', hintKey: 'hint.zoom' },
   text: { labelKey: 'tool.text', shortcut: 'T', hintKey: 'hint.text' }
 };
@@ -293,6 +293,9 @@ function applyTooltips(){
     'zoom-in': { labelKey: 'header.zoomIn', shortcut: null },
     'zoom-out': { labelKey: 'header.zoomOut', shortcut: null },
     'dup-layer': { labelKey: 'layers.duplicate', shortcut: 'Ctrl+J' },
+    'save-project': { labelKey: 'header.saveProject', shortcut: 'Ctrl+S' },
+    'open-project': { labelKey: 'header.openProject', shortcut: 'Ctrl+O' },
+    export: { labelKey: 'header.export', shortcut: 'Ctrl+Shift+S' },
     undo: { labelKey: 'header.undo', shortcut: 'Ctrl+Z' },
     redo: { labelKey: 'header.redo', shortcut: 'Ctrl+Shift+Z' }
   };
@@ -379,6 +382,16 @@ function updateCursorFeedback(clientX, clientY){
   }
   if(tool === 'move' && insideDocument){
     viewport.style.cursor = 'move';
+    return;
+  }
+  if(tool === 'select' && insideDocument){
+    const selectionMode = selection?.ready ? getSelectionHandleAt(pos) : null;
+    const cursors = { move:'move', n:'ns-resize', s:'ns-resize', e:'ew-resize', w:'ew-resize', nw:'nwse-resize', se:'nwse-resize', ne:'nesw-resize', sw:'nesw-resize' };
+    viewport.style.cursor = cursors[selectionMode] || 'crosshair';
+    return;
+  }
+  if(tool === 'crop' && insideDocument){
+    viewport.style.cursor = 'crosshair';
     return;
   }
   if(tool === 'zoom' && insideDocument){

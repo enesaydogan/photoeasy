@@ -265,6 +265,126 @@ function openTextEditor(options){
   }, 0);
 }
 
+const SELECTION_HANDLES = ['nw','n','ne','e','se','s','sw','w'];
+
+function ensureSelectionOverlay(withHandles = false){
+  let overlay = document.getElementById('sel-rect');
+  if(!overlay){
+    overlay = document.createElement('div');
+    overlay.className = 'selection-rect';
+    overlay.id = 'sel-rect';
+    viewport.appendChild(overlay);
+  }
+  overlay.querySelectorAll('.selection-handle').forEach((handle)=> handle.remove());
+  if(withHandles){
+    overlay.classList.add('is-adjustable');
+    SELECTION_HANDLES.forEach((position)=>{
+      const handle = document.createElement('span');
+      handle.className = 'selection-handle handle-' + position;
+      handle.dataset.handle = position;
+      overlay.appendChild(handle);
+    });
+  }else{
+    overlay.classList.remove('is-adjustable');
+  }
+  return overlay;
+}
+
+function updateSelectionOverlay(){
+  const overlay = document.getElementById('sel-rect');
+  if(!overlay || !selection) return;
+  const viewportRect = viewport.getBoundingClientRect();
+  const topLeft = canvasToPagePosition(selection.x, selection.y);
+  const bottomRight = canvasToPagePosition(selection.x + selection.w, selection.y + selection.h);
+  overlay.style.left = (topLeft.left - viewportRect.left) + 'px';
+  overlay.style.top = (topLeft.top - viewportRect.top) + 'px';
+  overlay.style.width = Math.max(0, bottomRight.left - topLeft.left) + 'px';
+  overlay.style.height = Math.max(0, bottomRight.top - topLeft.top) + 'px';
+}
+
+function getSelectionHandleAt(pos){
+  if(!selection?.ready) return null;
+  const viewRect = view.getBoundingClientRect();
+  const display = getDisplayTransform();
+  const cssScale = (viewRect.width / view.width) * display.totalScale;
+  const tolerance = 12 / Math.max(cssScale, 0.001);
+  const x1 = selection.x, y1 = selection.y, x2 = selection.x + selection.w, y2 = selection.y + selection.h;
+  const points = {
+    nw:[x1,y1], n:[(x1+x2)/2,y1], ne:[x2,y1], e:[x2,(y1+y2)/2],
+    se:[x2,y2], s:[(x1+x2)/2,y2], sw:[x1,y2], w:[x1,(y1+y2)/2]
+  };
+  for(const [handle, point] of Object.entries(points)){
+    if(Math.hypot(pos.x - point[0], pos.y - point[1]) <= tolerance) return handle;
+  }
+  if(pos.x >= x1 && pos.x <= x2 && pos.y >= y1 && pos.y <= y2) return 'move';
+  return null;
+}
+
+function updateSelectionAdjustment(pos){
+  const interaction = selection?.interaction;
+  if(!interaction) return;
+  const start = interaction.rect;
+  const dx = pos.x - interaction.pointer.x;
+  const dy = pos.y - interaction.pointer.y;
+  if(interaction.mode === 'move'){
+    selection.x = Math.max(0, Math.min(width - start.w, start.x + dx));
+    selection.y = Math.max(0, Math.min(height - start.h, start.y + dy));
+    selection.w = start.w; selection.h = start.h;
+  }else{
+    let left = start.x, top = start.y, right = start.x + start.w, bottom = start.y + start.h;
+    if(interaction.mode.includes('w')) left = Math.max(0, Math.min(right - 1, start.x + dx));
+    if(interaction.mode.includes('e')) right = Math.min(width, Math.max(left + 1, start.x + start.w + dx));
+    if(interaction.mode.includes('n')) top = Math.max(0, Math.min(bottom - 1, start.y + dy));
+    if(interaction.mode.includes('s')) bottom = Math.min(height, Math.max(top + 1, start.y + start.h + dy));
+    selection.x = left; selection.y = top; selection.w = right - left; selection.h = bottom - top;
+  }
+  updateSelectionOverlay();
+}
+
+function cancelSelection(showToast = false){
+  document.getElementById('sel-rect')?.remove();
+  selection = null;
+  renderToolProps();
+  if(showToast) addStatus(t('props.cancelSelection'), 'info', 1400);
+}
+
+function commitSelection(){
+  const sourceLayer = selection?.sourceLayer;
+  if(!selection?.ready || !sourceLayer || !layers.includes(sourceLayer)) return cancelSelection();
+  if(sourceLayer.locked){ addStatus(t('status.lockedEdit'), 'warning', 2600); return; }
+  const outputWidth = Math.max(1, Math.round(selection.w));
+  const outputHeight = Math.max(1, Math.round(selection.h));
+  const localLeft = Math.max(0, Math.floor(selection.x - sourceLayer.offset.x));
+  const localTop = Math.max(0, Math.floor(selection.y - sourceLayer.offset.y));
+  const localRight = Math.min(sourceLayer.canvas.width, Math.ceil(selection.x + selection.w - sourceLayer.offset.x));
+  const localBottom = Math.min(sourceLayer.canvas.height, Math.ceil(selection.y + selection.h - sourceLayer.offset.y));
+  const copyWidth = Math.max(0, localRight - localLeft);
+  const copyHeight = Math.max(0, localBottom - localTop);
+  if(copyWidth < 1 || copyHeight < 1) return cancelSelection();
+
+  const canvas = document.createElement('canvas'); canvas.width = outputWidth; canvas.height = outputHeight;
+  const ctx = canvas.getContext('2d');
+  const documentLeft = sourceLayer.offset.x + localLeft;
+  const documentTop = sourceLayer.offset.y + localTop;
+  ctx.drawImage(sourceLayer.canvas, localLeft, localTop, copyWidth, copyHeight, documentLeft - selection.x, documentTop - selection.y, copyWidth, copyHeight);
+  if(sourceLayer.maskCanvas){
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.drawImage(sourceLayer.maskCanvas, -selection.x, -selection.y);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  sourceLayer.ctx.clearRect(localLeft, localTop, copyWidth, copyHeight);
+  if(sourceLayer.type === 'text'){
+    sourceLayer.type = null; sourceLayer.text = null; sourceLayer.font = null;
+    sourceLayer.fontSize = null; sourceLayer.fontFamily = null; sourceLayer.bold = false;
+  }
+  const newLayer = {canvas, ctx, name:t('layer.selection'), autoName:{ key:'layer.selection' }, offset:{x:Math.round(selection.x), y:Math.round(selection.y)}, visible:true, opacity:sourceLayer.opacity, blend:sourceLayer.blend || 'source-over', maskCanvas:null, locked:false, role:null};
+  layers.splice(layers.indexOf(sourceLayer) + 1, 0, newLayer); activeLayer = newLayer;
+  document.getElementById('sel-rect')?.remove(); selection = null;
+  renderLayersUI(); composite(); renderToolProps();
+  pushHistory('history.liftSelection');
+  addStatus(t('status.selectionLifted'), 'info', 2600);
+}
+
 view.addEventListener('pointerdown', (e)=>{
   const panGesture = e.button === 1 || (e.button === 0 && spacePressed);
   if(panGesture) return;
@@ -300,8 +420,10 @@ view.addEventListener('pointerdown', (e)=>{
       {x:ts.bounds.w/2, y:ts.bounds.h/2},
       {x:-ts.bounds.w/2, y:ts.bounds.h/2}
     ].map(p=>{ const x = p.x * ts.scale; const y = p.y * ts.scale; const rx = x * Math.cos(ts.rotation) - y * Math.sin(ts.rotation); const ry = x * Math.sin(ts.rotation) + y * Math.cos(ts.rotation); return {x: cx + rx, y: cy + ry}; });
-    const topCenter = {x: Math.round((corners[0].x + corners[1].x)/2), y: Math.round((corners[0].y + corners[1].y)/2)};
-    const rotHandle = {x: topCenter.x, y: topCenter.y - 30};
+    const topCenter = {x: (corners[0].x + corners[1].x)/2, y: (corners[0].y + corners[1].y)/2};
+    const handleScale = Math.max(getDisplayTransform().totalScale, 0.001);
+    const handleRadius = 14 / handleScale;
+    const rotHandle = {x: topCenter.x, y: topCenter.y - (30 / handleScale)};
     // allow any corner to start a scale (uniform) operation
     let handled = false;
     for(let ci=0; ci<corners.length; ci++){
@@ -364,19 +486,27 @@ view.addEventListener('pointerdown', (e)=>{
   }
 
   if(tool==='select'){
-    // start selection rect
     const startCanvas = getPos(e);
+    if(selection?.ready){
+      const interactionMode = getSelectionHandleAt(startCanvas);
+      if(interactionMode){
+        selection.interaction = {
+          mode: interactionMode,
+          pointer: startCanvas,
+          rect: {x:selection.x, y:selection.y, w:selection.w, h:selection.h}
+        };
+        drawing = true;
+        return;
+      }
+      cancelSelection(false);
+    }
     if(!isPointInsideDocument(startCanvas)){
       addStatus(t('status.selectionInside'), 'warning', 2200);
       return;
     }
-    const vpRect = viewport.getBoundingClientRect();
-    const startVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
-    selection = { startCanvas, startVP, x:0, y:0, w:0, h:0 };
-    const selDiv = document.createElement('div'); selDiv.className='selection-rect'; selDiv.id = 'sel-rect';
-    // position initial zero-size rect at start point
-    selDiv.style.left = startVP.x + 'px'; selDiv.style.top = startVP.y + 'px'; selDiv.style.width = '0px'; selDiv.style.height = '0px';
-    viewport.appendChild(selDiv);
+    selection = { startCanvas, x:startCanvas.x, y:startCanvas.y, w:0, h:0, ready:false, interaction:null, sourceLayer:activeLayer };
+    ensureSelectionOverlay(false);
+    updateSelectionOverlay();
     drawing = true; return;
   }
 
@@ -387,12 +517,9 @@ view.addEventListener('pointerdown', (e)=>{
       addStatus(t('status.cropInside'), 'warning', 2200);
       return;
     }
-    const vpRect = viewport.getBoundingClientRect();
-    const startVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
-    selection = { startCanvas, startVP, x:0, y:0, w:0, h:0 };
-    const selDiv = document.createElement('div'); selDiv.className='selection-rect'; selDiv.id = 'sel-rect';
-    selDiv.style.left = startVP.x + 'px'; selDiv.style.top = startVP.y + 'px'; selDiv.style.width = '0px'; selDiv.style.height = '0px';
-    viewport.appendChild(selDiv);
+    selection = { startCanvas, x:startCanvas.x, y:startCanvas.y, w:0, h:0, ready:false };
+    ensureSelectionOverlay(false);
+    updateSelectionOverlay();
     drawing = true; return;
   }
 
@@ -521,23 +648,17 @@ view.addEventListener('pointermove', (e)=>{
   // allow selection/crop to update even when no active layer exists
   if(tool === 'select' || tool === 'crop'){
     if(!selection) return;
-    // update CSS overlay using viewport-space coordinates (client pixels)
-    const vpRect = viewport.getBoundingClientRect();
+    if(tool === 'select' && selection.ready && selection.interaction){
+      updateSelectionAdjustment(clampPointToDocument(pos));
+      return;
+    }
     const boundedPos = clampPointToDocument(pos);
-    const boundedPage = canvasToPagePosition(boundedPos.x, boundedPos.y);
-    const curVP = { x: boundedPage.left - vpRect.left, y: boundedPage.top - vpRect.top };
-    const left = Math.min(selection.startVP.x, curVP.x);
-    const top = Math.min(selection.startVP.y, curVP.y);
-    const wcss = Math.abs(curVP.x - selection.startVP.x);
-    const hcss = Math.abs(curVP.y - selection.startVP.y);
-    const selDiv = document.getElementById('sel-rect');
-    if(selDiv){ selDiv.style.left = left + 'px'; selDiv.style.top = top + 'px'; selDiv.style.width = wcss + 'px'; selDiv.style.height = hcss + 'px'; }
-    // also update logical canvas-space selection values for crop/selection logic
     const s = selection.startCanvas || selection.start;
     selection.x = Math.min(s.x, boundedPos.x);
     selection.y = Math.min(s.y, boundedPos.y);
     selection.w = Math.abs(boundedPos.x - s.x);
     selection.h = Math.abs(boundedPos.y - s.y);
+    updateSelectionOverlay();
     return;
   }
   // remaining drawing tools require an active layer
@@ -578,26 +699,23 @@ function finishPointerInteraction(e){
   if(!drawing) return;
   drawing = false;
   if(tool==='select'){
-    // finalize selection: create new layer with selected pixels
-    const selDiv = document.getElementById('sel-rect'); if(selDiv) selDiv.remove();
-    if(selection && selection.w > 1 && selection.h > 1 && activeLayer){
-      const s = selection;
-      const sx = Math.round(s.x - activeLayer.offset.x); const sy = Math.round(s.y - activeLayer.offset.y);
-      const sw = Math.round(s.w); const sh = Math.round(s.h);
-      if(sw>0 && sh>0){
-        const c = document.createElement('canvas'); c.width = sw; c.height = sh; const cctx = c.getContext('2d');
-        cctx.drawImage(activeLayer.canvas, sx, sy, sw, sh, 0,0,sw,sh);
-        // clear area on original layer
-        activeLayer.ctx.clearRect(sx, sy, sw, sh);
-        const newLayer = {canvas:c, ctx:cctx, name:t('layer.selection'), autoName:{ key:'layer.selection' }, offset:{x: Math.round(s.x), y: Math.round(s.y)}, visible:true, opacity:1, blend:'source-over', maskCanvas:null, locked:false, role:null};
-        layers.push(newLayer);
-        activeLayer = newLayer;
-        renderLayersUI(); composite();
-        pushHistory('history.liftSelection');
-        addStatus(t('status.selectionLifted'), 'info', 2600);
-      }
+    if(selection?.ready && selection.interaction){
+      selection.interaction = null;
+      ensureSelectionOverlay(true);
+      updateSelectionOverlay();
+      renderToolProps();
+      return;
     }
-    selection = null; return;
+    if(selection && selection.w > 1 && selection.h > 1 && selection.sourceLayer){
+      selection.ready = true;
+      selection.interaction = null;
+      ensureSelectionOverlay(true);
+      updateSelectionOverlay();
+      renderToolProps();
+    }else{
+      cancelSelection(false);
+    }
+    return;
   }
 
   if(tool === 'crop'){

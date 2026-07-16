@@ -20,6 +20,9 @@ function selectTool(t){
   if(cropPending && t !== 'crop'){
     try{ cancelCrop(); }catch(e){ cropPending = false; }
   }
+  if(selection?.ready && tool === 'select' && t !== 'select'){
+    try{ cancelSelection(false); }catch(e){ selection = null; }
+  }
   if(transformState && t !== 'transform'){
     try{ cancelTransform(false); }catch(e){ transformState = null; }
   }
@@ -151,6 +154,14 @@ function renderToolProps(){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
       const ok = document.createElement('button'); ok.textContent = t('props.commitCrop'); ok.onclick = ()=>{ try{ commitCrop(); }catch(e){} };
       const cancel = document.createElement('button'); cancel.textContent = t('props.cancelCrop'); cancel.onclick = ()=>{ try{ cancelCrop(); }catch(e){} };
+      row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
+    }
+  } else if(tool === 'select'){
+    const help = document.createElement('div'); help.className='prop-help'; help.textContent=t('props.selectionHelp'); el.appendChild(help);
+    if(selection?.ready){
+      const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
+      const ok = document.createElement('button'); ok.textContent = t('props.commitSelection'); ok.onclick = ()=>{ try{ commitSelection(); }catch(e){} };
+      const cancel = document.createElement('button'); cancel.textContent = t('props.cancelSelection'); cancel.onclick = ()=>{ try{ cancelSelection(true); }catch(e){} };
       row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
     }
   } else {

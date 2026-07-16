@@ -336,6 +336,30 @@ function updateLayerThumbnails(){
   });
 }
 
+let thumbnailRefreshPending = false;
+let compositeScratchCanvas = null;
+let maskScratchCanvas = null;
+
+function scheduleLayerThumbnailUpdate(){
+  if(thumbnailRefreshPending) return;
+  thumbnailRefreshPending = true;
+  window.requestAnimationFrame(()=>{
+    thumbnailRefreshPending = false;
+    updateLayerThumbnails();
+  });
+}
+
+function prepareScratchCanvas(canvas, nextWidth, nextHeight){
+  const target = canvas || document.createElement('canvas');
+  if(target.width !== nextWidth) target.width = nextWidth;
+  if(target.height !== nextHeight) target.height = nextHeight;
+  const ctx = target.getContext('2d');
+  ctx.clearRect(0, 0, nextWidth, nextHeight);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  return {canvas:target, ctx};
+}
+
 function moveLayerUp(indexFromTop){
   const idx = indexFromTop;
   if(idx >= layers.length-1) return;
@@ -365,8 +389,10 @@ function localizeGeneratedLayerNames(){
 
 function renderFlattenedToContext(destCtx, options = {}){
   const { applyViewportTransform = false, skipLayer = null } = options;
-  const accCanvas = document.createElement('canvas'); accCanvas.width = width; accCanvas.height = height;
-  const accCtx = accCanvas.getContext('2d');
+  const accumulator = prepareScratchCanvas(compositeScratchCanvas, width, height);
+  compositeScratchCanvas = accumulator.canvas;
+  const accCanvas = accumulator.canvas;
+  const accCtx = accumulator.ctx;
 
   for(const layer of layers){
     if(!layer.visible) continue;
@@ -375,8 +401,10 @@ function renderFlattenedToContext(destCtx, options = {}){
     let drawX = layer.offset.x;
     let drawY = layer.offset.y;
     if(layer.maskCanvas){
-      const masked = document.createElement('canvas'); masked.width = width; masked.height = height;
-      const maskedCtx = masked.getContext('2d');
+      const maskedResult = prepareScratchCanvas(maskScratchCanvas, width, height);
+      maskScratchCanvas = maskedResult.canvas;
+      const masked = maskedResult.canvas;
+      const maskedCtx = maskedResult.ctx;
       maskedCtx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
       maskedCtx.globalCompositeOperation = 'destination-in';
       maskedCtx.drawImage(layer.maskCanvas, 0, 0);
@@ -514,7 +542,8 @@ function composite(){
   }
   viewCtx.globalAlpha = 1;
   // update layer thumbnails when the main view changes
-  updateLayerThumbnails();
+  scheduleLayerThumbnailUpdate();
+  if(selection) updateSelectionOverlay();
   if(currentTextEditor) syncTextEditorAppearance(currentTextEditor);
   updateCanvasChrome();
 }

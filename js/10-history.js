@@ -2,21 +2,31 @@
 // History
 let history = [];
 let historyIndex = -1;
+
+function cloneHistoryCanvas(source){
+  if(!source) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = source.width;
+  canvas.height = source.height;
+  canvas.getContext('2d').drawImage(source, 0, 0);
+  return canvas;
+}
+
 function pushHistory(label = 'history.edit'){
   // capture state
   const snapshot = {width, height, layers: [], activeIndex: layers.indexOf(activeLayer), label, size: 0};
   for(const l of layers){
-    const dataURL = l.canvas.toDataURL();
-    const maskURL = l.maskCanvas ? l.maskCanvas.toDataURL() : null;
-    snapshot.size += dataURL.length + (maskURL ? maskURL.length : 0);
+    const canvas = cloneHistoryCanvas(l.canvas);
+    const maskCanvas = cloneHistoryCanvas(l.maskCanvas);
+    snapshot.size += (canvas.width * canvas.height * 4) + (maskCanvas ? maskCanvas.width * maskCanvas.height * 4 : 0);
     snapshot.layers.push({
-      dataURL,
+      canvas,
       offset: {...l.offset},
       visible: l.visible,
       opacity: l.opacity,
       name: l.name,
       blend: l.blend || 'source-over',
-      mask: maskURL,
+      maskCanvas,
       locked: l.locked || false,
       role: l.role || null,
       autoName: l.autoName ? { key: l.autoName.key, params: { ...(l.autoName.params || {}) } } : null,
@@ -33,7 +43,7 @@ function pushHistory(label = 'history.edit'){
   history = history.slice(0, historyIndex+1);
   history.push(snapshot);
   let totalSize = history.reduce((sum, item)=> sum + (item.size || 0), 0);
-  while(history.length > 2 && (history.length > MAX_HISTORY_STEPS || totalSize > MAX_HISTORY_CHARS)){
+  while(history.length > 2 && (history.length > MAX_HISTORY_STEPS || totalSize > MAX_HISTORY_BYTES)){
     const removed = history.shift();
     totalSize -= removed?.size || 0;
   }
@@ -68,10 +78,9 @@ async function restoreHistory(idx){
   const selDiv = document.getElementById('sel-rect');
   if(selDiv) selDiv.remove();
   try{
-  const newLayers = await Promise.all(snap.layers.map(async (item)=>{
-    const img = await loadImageFromDataURL(item.dataURL);
-    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
-    const ctx = c.getContext('2d'); ctx.drawImage(img,0,0);
+  const newLayers = snap.layers.map((item)=>{
+    const c = cloneHistoryCanvas(item.canvas);
+    const ctx = c.getContext('2d');
     const layerObj = {
       canvas:c,
       ctx,
@@ -92,13 +101,9 @@ async function restoreHistory(idx){
       fontFamily: item.fontFamily || null,
       bold: item.bold || false
     };
-    if(item.mask){
-      const mimg = await loadImageFromDataURL(item.mask);
-      const mc = document.createElement('canvas'); mc.width = mimg.width; mc.height = mimg.height; const mctx = mc.getContext('2d'); mctx.drawImage(mimg,0,0);
-      layerObj.maskCanvas = mc;
-    }
+    if(item.maskCanvas) layerObj.maskCanvas = cloneHistoryCanvas(item.maskCanvas);
     return layerObj;
-  }));
+  });
   if(restoreToken !== historyRestoreToken) return;
   layers = newLayers;
   localizeGeneratedLayerNames();
