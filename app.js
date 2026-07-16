@@ -60,6 +60,16 @@ let layerDragIndex = null;
 let renamingLayerIndex = null;
 let renamingLayerDraft = '';
 let moveInteraction = null;
+let drawingSession = null;
+let activePointerId = null;
+let spacePressed = false;
+let historyRestoreToken = 0;
+let historyRestoring = false;
+
+const MAX_CANVAS_DIMENSION = 16384;
+const MAX_CANVAS_PIXELS = 40_000_000;
+const MAX_HISTORY_STEPS = 24;
+const MAX_HISTORY_CHARS = 120_000_000;
 
 const cursorPreview = document.createElement('div');
 cursorPreview.className = 'cursor-preview';
@@ -69,7 +79,7 @@ const TOOL_META = {
   move: {
     label: 'Move',
     shortcut: 'V',
-    hint: 'Move: drag the active layer. Middle-mouse or Ctrl+drag pans the view.'
+    hint: 'Move: drag a layer. Alt+drag duplicates it; Space+drag or middle-mouse pans the view.'
   },
   brush: {
     label: 'Brush',
@@ -119,7 +129,32 @@ const TOOL_META = {
 };
 
 function isPointInsideDocument(pos){
-  return pos.x >= 0 && pos.y >= 0 && pos.x <= width && pos.y <= height;
+  return pos.x >= 0 && pos.y >= 0 && pos.x < width && pos.y < height;
+}
+
+function clampPointToDocument(pos){
+  return {
+    x: Math.max(0, Math.min(width, pos.x)),
+    y: Math.max(0, Math.min(height, pos.y))
+  };
+}
+
+function validateCanvasSize(nextWidth, nextHeight, layerCount = Math.max(1, layers.length)){
+  if(!Number.isInteger(nextWidth) || !Number.isInteger(nextHeight) || nextWidth <= 0 || nextHeight <= 0){
+    return 'Please enter valid canvas dimensions.';
+  }
+  if(nextWidth > MAX_CANVAS_DIMENSION || nextHeight > MAX_CANVAS_DIMENSION){
+    return 'Canvas sides cannot exceed ' + MAX_CANVAS_DIMENSION.toLocaleString() + ' px.';
+  }
+  const pixels = nextWidth * nextHeight;
+  if(!Number.isSafeInteger(pixels) || pixels > MAX_CANVAS_PIXELS){
+    return 'Canvas area cannot exceed ' + MAX_CANVAS_PIXELS.toLocaleString() + ' pixels.';
+  }
+  const estimatedBytes = pixels * 4 * Math.max(2, layerCount + 1);
+  if(estimatedBytes > 512 * 1024 * 1024){
+    return 'This size would require too much working memory for the current layer stack.';
+  }
+  return null;
 }
 
 function isLayerEditLocked(){
@@ -145,7 +180,7 @@ function addStatus(message, type = 'info', timeout = 2600){
 
 function updateOnboarding(){
   if(!canvasOnboarding) return;
-  const show = layers.length <= 1 && layers.every((layer)=> String(layer?.name || '').toLowerCase().includes('background'));
+  const show = layers.length <= 1 && layers.every((layer)=> layer?.role === 'background');
   canvasOnboarding.classList.toggle('visible', show);
 }
 
@@ -188,6 +223,7 @@ function renderHistoryPanel(){
     const snapshot = history[idx];
     const entry = document.createElement('button');
     entry.type = 'button';
+    entry.disabled = historyRestoring;
     entry.className = 'history-entry';
     if(idx === historyIndex) entry.classList.add('active');
     if(idx > historyIndex) entry.classList.add('future');
@@ -222,7 +258,7 @@ function renderHistoryPanel(){
 function updateZoomReadout(){
   if(!zoomReadoutEl) return;
   const display = getDisplayTransform();
-  zoomReadoutEl.textContent = Math.max(1, Math.round(display.totalScale * 100)) + '%';
+  zoomReadoutEl.textContent = Math.max(1, Math.round((display.totalScale / getPreviewDpr()) * 100)) + '%';
 }
 
 function updateSidebarPriority(){
@@ -315,7 +351,7 @@ function fitView(showToast = false){
 
 function setActualSize(showToast = false){
   const fitScale = Math.min(view.width / width, view.height / height) || 1;
-  viewportTransform.scale = 1 / fitScale;
+  viewportTransform.scale = getPreviewDpr() / fitScale;
   viewportTransform.offsetX = 0;
   viewportTransform.offsetY = 0;
   composite();
@@ -359,7 +395,7 @@ function updateCursorFeedback(clientX, clientY){
   const hoveredTextLayer = insideDocument ? findTextLayerAt(pos) : null;
 
   if((tool === 'brush' || tool === 'eraser') && insideDocument && !locked){
-    const diameter = Math.max(8, Math.round(size * getDisplayTransform().totalScale));
+    const diameter = Math.max(8, Math.round(size * getDisplayTransform().totalScale / getPreviewDpr()));
     cursorPreview.classList.add('visible');
     cursorPreview.style.width = diameter + 'px';
     cursorPreview.style.height = diameter + 'px';
@@ -410,12 +446,17 @@ function findLayerAt(pos){
 }
 
 function resizePreviewCanvas(){
-  const nextWidth = Math.max(1, viewport.clientWidth || 1);
-  const nextHeight = Math.max(1, viewport.clientHeight || 1);
+  const dpr = getPreviewDpr();
+  const nextWidth = Math.max(1, Math.round((viewport.clientWidth || 1) * dpr));
+  const nextHeight = Math.max(1, Math.round((viewport.clientHeight || 1) * dpr));
   if(view.width !== nextWidth || view.height !== nextHeight){
     view.width = nextWidth;
     view.height = nextHeight;
   }
+}
+
+function getPreviewDpr(){
+  return Math.max(1, Math.min(3, window.devicePixelRatio || 1));
 }
 
 function getDisplayTransform(){
@@ -458,17 +499,21 @@ let history = [];
 let historyIndex = -1;
 function pushHistory(label = 'Edit'){
   // capture state
-  const snapshot = {width, height, layers: [], activeIndex: layers.indexOf(activeLayer), label};
+  const snapshot = {width, height, layers: [], activeIndex: layers.indexOf(activeLayer), label, size: 0};
   for(const l of layers){
+    const dataURL = l.canvas.toDataURL();
+    const maskURL = l.maskCanvas ? l.maskCanvas.toDataURL() : null;
+    snapshot.size += dataURL.length + (maskURL ? maskURL.length : 0);
     snapshot.layers.push({
-      dataURL: l.canvas.toDataURL(),
+      dataURL,
       offset: {...l.offset},
       visible: l.visible,
       opacity: l.opacity,
       name: l.name,
       blend: l.blend || 'source-over',
-      mask: l.maskCanvas ? l.maskCanvas.toDataURL() : null,
+      mask: maskURL,
       locked: l.locked || false,
+      role: l.role || null,
       type: l.type || null,
       text: l.text || null,
       font: l.font || null,
@@ -481,12 +526,29 @@ function pushHistory(label = 'Edit'){
   // trim redo
   history = history.slice(0, historyIndex+1);
   history.push(snapshot);
+  let totalSize = history.reduce((sum, item)=> sum + (item.size || 0), 0);
+  while(history.length > 2 && (history.length > MAX_HISTORY_STEPS || totalSize > MAX_HISTORY_CHARS)){
+    const removed = history.shift();
+    totalSize -= removed?.size || 0;
+  }
   historyIndex = history.length-1;
   updateHistoryButtons();
 }
 
+function loadImageFromDataURL(dataURL){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=> resolve(img);
+    img.onerror = ()=> reject(new Error('History image could not be decoded.'));
+    img.src = dataURL;
+  });
+}
+
 async function restoreHistory(idx){
   if(idx < 0 || idx >= history.length) return;
+  const restoreToken = ++historyRestoreToken;
+  historyRestoring = true;
+  updateHistoryButtons();
   const snap = history[idx];
   width = snap.width || width;
   height = snap.height || height;
@@ -499,11 +561,9 @@ async function restoreHistory(idx){
   selection = null;
   const selDiv = document.getElementById('sel-rect');
   if(selDiv) selDiv.remove();
-  const newLayers = [];
-  for(const item of snap.layers){
-    const img = new Image();
-    img.src = item.dataURL;
-    await new Promise(r=> img.onload = r);
+  try{
+  const newLayers = await Promise.all(snap.layers.map(async (item)=>{
+    const img = await loadImageFromDataURL(item.dataURL);
     const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
     const ctx = c.getContext('2d'); ctx.drawImage(img,0,0);
     const layerObj = {
@@ -516,6 +576,7 @@ async function restoreHistory(idx){
       blend: item.blend || 'source-over',
       maskCanvas: null,
       locked: item.locked || false,
+      role: item.role || null,
       type: item.type || null,
       text: item.text || null,
       font: item.font || null,
@@ -525,12 +586,13 @@ async function restoreHistory(idx){
       bold: item.bold || false
     };
     if(item.mask){
-      const mimg = new Image(); mimg.src = item.mask; await new Promise(r=> mimg.onload = r);
+      const mimg = await loadImageFromDataURL(item.mask);
       const mc = document.createElement('canvas'); mc.width = mimg.width; mc.height = mimg.height; const mctx = mc.getContext('2d'); mctx.drawImage(mimg,0,0);
       layerObj.maskCanvas = mc;
     }
-    newLayers.push(layerObj);
-  }
+    return layerObj;
+  }));
+  if(restoreToken !== historyRestoreToken) return;
   layers = newLayers;
   activeLayer = layers[snap.activeIndex] || null;
   editMaskMode = false;
@@ -539,29 +601,36 @@ async function restoreHistory(idx){
   }
   renderLayersUI(); composite();
   historyIndex = idx;
-  updateHistoryButtons();
+  }catch(error){
+    if(restoreToken === historyRestoreToken) addStatus(error.message || 'History could not be restored.', 'warning', 3200);
+  }finally{
+    if(restoreToken === historyRestoreToken){
+      historyRestoring = false;
+      updateHistoryButtons();
+    }
+  }
 }
 
 function updateHistoryButtons(){
   try{
     const undoBtn = document.getElementById('undo');
     const redoBtn = document.getElementById('redo');
-    if(undoBtn) undoBtn.disabled = historyIndex <= 0;
-    if(redoBtn) redoBtn.disabled = historyIndex >= history.length-1 || history.length===0;
+    if(undoBtn) undoBtn.disabled = historyRestoring || historyIndex <= 0;
+    if(redoBtn) redoBtn.disabled = historyRestoring || historyIndex >= history.length-1 || history.length===0;
   }catch(e){}
   updateCanvasChrome();
   renderHistoryPanel();
 }
 
 async function undo(){
-  if(historyIndex > 0){
+  if(!historyRestoring && historyIndex > 0){
     const label = history[historyIndex]?.label || 'edit';
     await restoreHistory(historyIndex-1);
     addStatus('Undid ' + label + '.', 'info', 1800);
   }
 }
 async function redo(){
-  if(historyIndex < history.length-1){
+  if(!historyRestoring && historyIndex < history.length-1){
     const label = history[historyIndex + 1]?.label || 'edit';
     await restoreHistory(historyIndex+1);
     addStatus('Redid ' + label + '.', 'info', 1800);
@@ -569,7 +638,7 @@ async function redo(){
 }
 
 function createLayer(name='Layer', options = {}){
-  const { historyLabel = 'Add Layer', skipHistory = false } = options;
+  const { historyLabel = 'Add Layer', skipHistory = false, role = null } = options;
   // ensure new layer canvas matches the largest existing layer or the current view
   let desiredW = width, desiredH = height;
   for(const l of layers){ if(l && l.canvas){ desiredW = Math.max(desiredW, l.canvas.width); desiredH = Math.max(desiredH, l.canvas.height); } }
@@ -582,16 +651,15 @@ function createLayer(name='Layer', options = {}){
   const c = document.createElement('canvas');
   c.width = desiredW; c.height = desiredH;
   const ctx = c.getContext('2d');
-  // If this is a Background layer, fill it white by default
-  if(name && String(name).toLowerCase().includes('background')){
+  const isBackground = role === 'background';
+  if(isBackground){
     ctx.save(); ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,c.width,c.height); ctx.restore();
   }
-  // Lock background layers by default
-  const isBackground = name && String(name).toLowerCase().includes('background');
-  const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null, locked: isBackground};
+  const layer = {canvas:c,ctx,name,offset:{x:0,y:0},visible:true,opacity:1, blend:'source-over', maskCanvas:null, locked: isBackground, role};
   layers.push(layer);
+  activeLayer = layer;
+  editMaskMode = false;
   if(!skipHistory) pushHistory(historyLabel);
-  setActiveLayer(layers.length-1);
   renderLayersUI();
   composite();
 }
@@ -636,6 +704,7 @@ function duplicateLayer(sourceLayer = activeLayer, options = {}){
     blend: sourceLayer.blend || 'source-over',
     maskCanvas: sourceLayer.maskCanvas ? cloneCanvas(sourceLayer.maskCanvas) : null,
     locked: !!sourceLayer.locked,
+    role: null,
     type: sourceLayer.type || null,
     text: sourceLayer.text || null,
     font: sourceLayer.font || null,
@@ -662,7 +731,12 @@ pushHistory('Blank Document');
 updateHistoryButtons();
 
 function setActiveLayer(idx){
-  activeLayer = layers[idx];
+  const targetLayer = layers[idx];
+  if(currentTextEditor && currentTextEditor.layer && currentTextEditor.layer !== targetLayer){
+    try{ currentTextEditor.commit(); }catch(e){ currentTextEditor = null; }
+  }
+  activeLayer = layers.includes(targetLayer) ? targetLayer : (layers[Math.min(idx, layers.length - 1)] || null);
+  editMaskMode = false;
   renderLayersUI();
   updateCanvasChrome();
 }
@@ -674,6 +748,9 @@ function deleteActiveLayer(){
   }
   const idx = layers.indexOf(activeLayer);
   if(idx>=0){
+    if(currentTextEditor){
+      try{ currentTextEditor.cancel(); }catch(e){ currentTextEditor = null; }
+    }
     if(renamingLayerIndex === idx){
       renamingLayerIndex = null;
       renamingLayerDraft = '';
@@ -730,6 +807,7 @@ function renderLayersUI(){
       nameNode = name;
     }
     const opacity = document.createElement('input'); opacity.type = 'range'; opacity.min = 0; opacity.max = 1; opacity.step = 0.01; opacity.value = layer.opacity; opacity.className = 'layer-opacity';
+    opacity.setAttribute('aria-label', layer.name + ' opacity');
     const opVal = document.createElement('div'); opVal.className = 'layer-opacity-value'; opVal.textContent = Math.round(layer.opacity*100) + '%';
     opacity.oninput = (e)=>{ layer.opacity = Number(e.target.value); opVal.textContent = Math.round(layer.opacity*100) + '%'; composite(); };
     opacity.onchange = ()=> pushHistory('Adjust Layer Opacity');
@@ -742,6 +820,7 @@ function renderLayersUI(){
     dragHandle.type = 'button';
     dragHandle.className = 'layer-icon layer-grip';
     dragHandle.title = 'Drag to reorder layer';
+    dragHandle.setAttribute('aria-label', 'Drag ' + layer.name + ' to reorder');
     dragHandle.textContent = '::';
     dragHandle.onclick = (ev)=> ev.stopPropagation();
     const vis = document.createElement('button');
@@ -781,6 +860,7 @@ function renderLayersUI(){
     const blendRow = document.createElement('div'); blendRow.className = 'layer-blend-row';
     const blendLabel = document.createElement('div'); blendLabel.className='prop-title'; blendLabel.textContent='Blend';
     const blendSel = document.createElement('select'); ['source-over','multiply','screen','overlay','darken','lighten'].forEach(b=>{ const o=document.createElement('option'); o.value=b; o.textContent=b; if((layer.blend||'source-over')===b) o.selected=true; blendSel.appendChild(o); });
+    blendSel.setAttribute('aria-label', layer.name + ' blend mode');
     blendSel.onchange = (e)=>{ layer.blend = e.target.value; composite(); pushHistory('Change Blend Mode'); };
     // prevent the select from bubbling (keeps the dropdown open while interacting)
     blendSel.addEventListener('pointerdown', (ev)=>{ ev.stopPropagation(); });
@@ -811,7 +891,7 @@ function renderLayersUI(){
 
     // Mask button (right)
     const maskBtn = document.createElement('button'); maskBtn.type = 'button'; maskBtn.className='mask-btn'; maskBtn.textContent = layer.maskCanvas? 'Remove Mask' : 'Add Mask';
-    maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; addStatus('Mask removed. Undo restores it.', 'warning', 3200); pushHistory('Remove Mask'); } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; pushHistory('Add Mask'); addStatus('Mask added to ' + layer.name + '.', 'info', 1800); } renderLayersUI(); composite(); };
+    maskBtn.onclick = (ev)=>{ ev.stopPropagation(); if(layer.maskCanvas){ layer.maskCanvas = null; if(layer === activeLayer) editMaskMode = false; addStatus('Mask removed. Undo restores it.', 'warning', 3200); pushHistory('Remove Mask'); } else { const mc=document.createElement('canvas'); mc.width = width; mc.height = height; const mctx = mc.getContext('2d'); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,mc.width,mc.height); layer.maskCanvas = mc; pushHistory('Add Mask'); addStatus('Mask added to ' + layer.name + '.', 'info', 1800); } renderLayersUI(); composite(); renderToolProps(); };
     rightControls.appendChild(maskBtn);
 
     controlRow.appendChild(leftControls);
@@ -821,6 +901,18 @@ function renderLayersUI(){
     row.appendChild(meta);
     row.appendChild(controls);
     controls.appendChild(vis);
+    const raise = document.createElement('button');
+    raise.type = 'button'; raise.className = 'layer-icon'; raise.textContent = 'Up';
+    raise.title = 'Move layer up'; raise.setAttribute('aria-label', 'Move ' + layer.name + ' up');
+    raise.disabled = i >= layers.length - 1;
+    raise.onclick = (ev)=>{ ev.stopPropagation(); moveLayerUp(i); };
+    const lower = document.createElement('button');
+    lower.type = 'button'; lower.className = 'layer-icon'; lower.textContent = 'Down';
+    lower.title = 'Move layer down'; lower.setAttribute('aria-label', 'Move ' + layer.name + ' down');
+    lower.disabled = i <= 0;
+    lower.onclick = (ev)=>{ ev.stopPropagation(); moveLayerDown(i); };
+    controls.appendChild(raise);
+    controls.appendChild(lower);
     controls.appendChild(dragHandle);
 
     // Row selection behavior
@@ -846,7 +938,8 @@ function renderLayersUI(){
       const rect = row.getBoundingClientRect();
       const placeAfter = ev.clientY >= rect.top + rect.height / 2;
       clearLayerDragState();
-      reorderLayer(layerDragIndex, i, placeAfter);
+      // The visual list is the reverse of the model stack.
+      reorderLayer(layerDragIndex, i, !placeAfter);
       layerDragIndex = null;
     });
     row.addEventListener('dragend', ()=>{
@@ -878,8 +971,8 @@ function moveLayerUp(indexFromTop){
   const a = layers[idx];
   layers.splice(idx,1);
   layers.splice(idx+1,0,a);
-  renderLayersUI(); composite();
-  pushHistory();
+  activeLayer = a; renderLayersUI(); composite();
+  pushHistory('Move Layer Up');
 }
 
 function moveLayerDown(indexFromTop){
@@ -888,77 +981,35 @@ function moveLayerDown(indexFromTop){
   const a = layers[idx];
   layers.splice(idx,1);
   layers.splice(idx-1,0,a);
-  renderLayersUI(); composite();
-  pushHistory();
+  activeLayer = a; renderLayersUI(); composite();
+  pushHistory('Move Layer Down');
 }
 
 function renderFlattenedToContext(destCtx, options = {}){
   const { applyViewportTransform = false, skipLayer = null } = options;
-  const tmp = document.createElement('canvas'); tmp.width = width; tmp.height = height;
-  // contexts used for readback should set willReadFrequently to true.
-  // This is important for performance when dealing with large images.
-  const tctx = tmp.getContext('2d', { willReadFrequently: true });
   const accCanvas = document.createElement('canvas'); accCanvas.width = width; accCanvas.height = height;
-  const accCtx = accCanvas.getContext('2d', { willReadFrequently: true });
-
-  // helper: perform per-pixel blend of src (ImageData) onto accCtx at region x,y
-  function blendRectToAcc(x,y,w,h, srcImg, layer){
-    // read destination region
-    const dstImg = accCtx.getImageData(x,y,w,h);
-    const s = srcImg.data; const d = dstImg.data;
-    const blendName = layer.blend || 'source-over';
-    const funcs = {
-      'multiply': (s,d)=> s*d,
-      'screen': (s,d)=> 1 - (1-s)*(1-d),
-      'overlay': (s,d)=> (d < 0.5) ? (2*s*d) : (1 - 2*(1-s)*(1-d)),
-      'darken': (s,d)=> Math.min(s,d),
-      'lighten': (s,d)=> Math.max(s,d)
-    };
-    const blendFn = funcs[blendName];
-    for(let iy=0; iy<h; iy++){
-      for(let ix=0; ix<w; ix++){
-        const i = (iy * w + ix) * 4;
-        const sR = s[i]/255, sG = s[i+1]/255, sB = s[i+2]/255, sAraw = s[i+3]/255;
-        const sA = sAraw * (layer.opacity === undefined ? 1 : layer.opacity);
-        if(sA === 0) continue;
-        const dR = d[i]/255, dG = d[i+1]/255, dB = d[i+2]/255, dA = d[i+3]/255;
-        let bR, bG, bB;
-        if(!blendFn) { bR = sR; bG = sG; bB = sB; } else { bR = blendFn(sR,dR); bG = blendFn(sG,dG); bB = blendFn(sB,dB); }
-        const outA = sA + dA*(1 - sA);
-        const premR = bR * sA + dR * dA * (1 - sA);
-        const premG = bG * sA + dG * dA * (1 - sA);
-        const premB = bB * sA + dB * dA * (1 - sA);
-        const outR = outA ? (premR / outA) : 0;
-        const outG = outA ? (premG / outA) : 0;
-        const outB = outA ? (premB / outA) : 0;
-        d[i] = Math.round(outR*255); d[i+1] = Math.round(outG*255); d[i+2] = Math.round(outB*255); d[i+3] = Math.round(outA*255);
-      }
-    }
-    accCtx.putImageData(dstImg, x, y);
-  }
+  const accCtx = accCanvas.getContext('2d');
 
   for(const layer of layers){
     if(!layer.visible) continue;
     if(skipLayer && layer === skipLayer) continue;
-    // fast path: simple source-over with no mask -> draw directly to accCtx
-    if((!layer.blend || layer.blend === 'source-over') && !layer.maskCanvas){
-      accCtx.globalCompositeOperation = 'source-over';
-      accCtx.globalAlpha = layer.opacity === undefined ? 1 : layer.opacity;
-      accCtx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
-      accCtx.globalAlpha = 1;
-      continue;
+    let source = layer.canvas;
+    let drawX = layer.offset.x;
+    let drawY = layer.offset.y;
+    if(layer.maskCanvas){
+      const masked = document.createElement('canvas'); masked.width = width; masked.height = height;
+      const maskedCtx = masked.getContext('2d');
+      maskedCtx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
+      maskedCtx.globalCompositeOperation = 'destination-in';
+      maskedCtx.drawImage(layer.maskCanvas, 0, 0);
+      maskedCtx.globalCompositeOperation = 'source-over';
+      source = masked; drawX = 0; drawY = 0;
     }
-    // otherwise we need to render the layer into tmp (including mask) and blend per-pixel
-    tctx.clearRect(0,0,width,height);
-    tctx.drawImage(layer.canvas, layer.offset.x, layer.offset.y);
-    if(layer.maskCanvas){ tctx.globalCompositeOperation = 'destination-in'; tctx.drawImage(layer.maskCanvas, 0,0); tctx.globalCompositeOperation = 'source-over'; }
-    // determine bounding rect for this layer in canvas coordinates
-    const lx0 = Math.max(0, layer.offset.x|0); const ly0 = Math.max(0, layer.offset.y|0);
-    const lx1 = Math.min(width, layer.offset.x + layer.canvas.width|0); const ly1 = Math.min(height, layer.offset.y + layer.canvas.height|0);
-    const rw = Math.max(0, lx1 - lx0); const rh = Math.max(0, ly1 - ly0);
-    if(rw === 0 || rh === 0) continue;
-    const srcImg = tctx.getImageData(lx0, ly0, rw, rh);
-    blendRectToAcc(lx0, ly0, rw, rh, srcImg, layer);
+    accCtx.globalCompositeOperation = layer.blend || 'source-over';
+    accCtx.globalAlpha = layer.opacity === undefined ? 1 : layer.opacity;
+    accCtx.drawImage(source, drawX, drawY);
+    accCtx.globalAlpha = 1;
+    accCtx.globalCompositeOperation = 'source-over';
   }
   destCtx.save();
   destCtx.clearRect(0, 0, destCtx.canvas.width, destCtx.canvas.height);
@@ -989,8 +1040,8 @@ function composite(){
     viewCtx.rotate(ts.rotation);
     viewCtx.scale(ts.scale, ts.scale);
     viewCtx.globalAlpha = l.opacity;
-    // draw only the bbox (tight pixels) centered
-    viewCtx.drawImage(ts.bboxCanvas, -ts.bounds.w/2, -ts.bounds.h/2);
+    viewCtx.globalCompositeOperation = l.blend || 'source-over';
+    viewCtx.drawImage(ts.previewCanvas || ts.bboxCanvas, -ts.bounds.w/2, -ts.bounds.h/2);
     viewCtx.restore();
 
     // draw bounding box + handles
@@ -1017,8 +1068,10 @@ function composite(){
     // draw handles
     for(const c of corners){ viewCtx.fillStyle='rgba(226,232,238,0.95)'; viewCtx.fillRect(c.x-6,c.y-6,12,12); }
     // rotate handle: top center offset
-    const topCenter = {x: Math.round((corners[0].x + corners[1].x)/2), y: Math.round((corners[0].y + corners[1].y)/2)};
-    const rotHandle = {x: topCenter.x, y: topCenter.y - 30};
+    const topCenter = {x: (corners[0].x + corners[1].x)/2, y: (corners[0].y + corners[1].y)/2};
+    const handleScale = Math.max(getDisplayTransform().totalScale, 0.001);
+    const handleRadius = 14 / handleScale;
+    const rotHandle = {x: topCenter.x, y: topCenter.y - (30 / handleScale)};
     viewCtx.beginPath(); viewCtx.strokeStyle='rgba(210,216,223,0.86)'; viewCtx.moveTo(topCenter.x, topCenter.y); viewCtx.lineTo(rotHandle.x, rotHandle.y); viewCtx.stroke();
     viewCtx.fillStyle='rgba(196,204,212,0.95)'; viewCtx.beginPath(); viewCtx.arc(rotHandle.x, rotHandle.y, 6, 0, Math.PI*2); viewCtx.fill();
   }
@@ -1253,6 +1306,12 @@ function openTextEditor(options){
     const fontString = getTextFontString(editorState.pending);
     const textCanvas = createTextCanvas(textValue, fontString, editorState.pending.color, editorState.pending.fontSize);
     if(targetLayer){
+      if(!layers.includes(targetLayer)){
+        renderToolProps();
+        composite();
+        addStatus('Text edit was discarded because the layer no longer exists.', 'warning', 2600);
+        return;
+      }
       targetLayer.canvas = textCanvas;
       targetLayer.ctx = textCanvas.getContext('2d');
       targetLayer.text = textValue;
@@ -1271,6 +1330,10 @@ function openTextEditor(options){
         offset: { ...editorState.anchor },
         visible: true,
         opacity: 1,
+        blend: 'source-over',
+        maskCanvas: null,
+        locked: false,
+        role: null,
         type: 'text',
         text: textValue,
         font: fontString,
@@ -1316,10 +1379,14 @@ function openTextEditor(options){
   }, 0);
 }
 
-view.addEventListener('mousedown', (e)=>{
-  // Only allow left mouse button (button 0) for tool operations
-  // Right click (button 2) and middle click (button 1) should not activate tools
-  if(e.button !== 0) return;
+view.addEventListener('pointerdown', (e)=>{
+  const panGesture = e.button === 1 || (e.button === 0 && spacePressed);
+  if(panGesture) return;
+  if(e.pointerType === 'mouse' && e.button !== 0) return;
+  activePointerId = e.pointerId;
+  try{ view.setPointerCapture(e.pointerId); }catch(err){}
+  e.preventDefault();
+  e.stopPropagation();
   
   // allow some tools even when there's no active layer (text, crop)
   if(!activeLayer && !['text','crop','zoom','move'].includes(tool)) return;
@@ -1354,13 +1421,13 @@ view.addEventListener('mousedown', (e)=>{
     for(let ci=0; ci<corners.length; ci++){
       const c = corners[ci];
       const d = Math.hypot(pos.x - c.x, pos.y - c.y);
-      if(d < 14){
+      if(d < handleRadius){
         ts.dragging = true; ts.handle = 'scale'; ts.handleCorner = ci; ts.startScale = ts.scale; ts.startDist = Math.hypot(pos.x - cx, pos.y - cy); handled = true; break;
       }
     }
     const dRot = Math.hypot(pos.x - rotHandle.x, pos.y - rotHandle.y);
-    if(!handled && dRot < 14){ ts.dragging = true; ts.handle = 'rotate'; ts.startAngle = Math.atan2(pos.y - cy, pos.x - cx); ts.startRotation = ts.rotation; handled = true; }
-    else {
+    if(!handled && dRot < handleRadius){ ts.dragging = true; ts.handle = 'rotate'; ts.startAngle = Math.atan2(pos.y - cy, pos.x - cx); ts.startRotation = ts.rotation; handled = true; }
+    if(!handled){
       // check inside transformed rect
       const lx = (pos.x - cx); const ly = (pos.y - cy);
       // inverse rotate/scale
@@ -1381,7 +1448,7 @@ view.addEventListener('mousedown', (e)=>{
         updateCursorFeedback(e.clientX, e.clientY);
         return;
       }
-      if(e.ctrlKey || e.metaKey){
+      if(e.altKey){
         const duplicatedLayer = duplicateLayer(clickedLayer, { skipHistory: true, showToast: false, activate: true });
         if(!duplicatedLayer) return;
         moveInteraction = { duplicated: true, moved: false, sourceName: duplicatedLayer.name };
@@ -1412,9 +1479,14 @@ view.addEventListener('mousedown', (e)=>{
 
   if(tool==='select'){
     // start selection rect
+    const startCanvas = getPos(e);
+    if(!isPointInsideDocument(startCanvas)){
+      addStatus('Start the selection inside the canvas.', 'warning', 2200);
+      return;
+    }
     const vpRect = viewport.getBoundingClientRect();
     const startVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
-    selection = { startCanvas: getPos(e), startVP, x:0, y:0, w:0, h:0 };
+    selection = { startCanvas, startVP, x:0, y:0, w:0, h:0 };
     const selDiv = document.createElement('div'); selDiv.className='selection-rect'; selDiv.id = 'sel-rect';
     // position initial zero-size rect at start point
     selDiv.style.left = startVP.x + 'px'; selDiv.style.top = startVP.y + 'px'; selDiv.style.width = '0px'; selDiv.style.height = '0px';
@@ -1424,9 +1496,14 @@ view.addEventListener('mousedown', (e)=>{
 
   if(tool === 'crop'){
     // start crop rect (re-uses selection overlay)
+    const startCanvas = getPos(e);
+    if(!isPointInsideDocument(startCanvas)){
+      addStatus('Start the crop inside the canvas.', 'warning', 2200);
+      return;
+    }
     const vpRect = viewport.getBoundingClientRect();
     const startVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
-    selection = { startCanvas: getPos(e), startVP, x:0, y:0, w:0, h:0 };
+    selection = { startCanvas, startVP, x:0, y:0, w:0, h:0 };
     const selDiv = document.createElement('div'); selDiv.className='selection-rect'; selDiv.id = 'sel-rect';
     selDiv.style.left = startVP.x + 'px'; selDiv.style.top = startVP.y + 'px'; selDiv.style.width = '0px'; selDiv.style.height = '0px';
     viewport.appendChild(selDiv);
@@ -1436,10 +1513,9 @@ view.addEventListener('mousedown', (e)=>{
   if(tool === 'magic'){
     const pos = getPos(e);
     if(!activeLayer) { addStatus('Select a layer before using Magic Wand.', 'warning'); return; }
-    // build composite imageData
-    const tmpc = document.createElement('canvas'); tmpc.width = width; tmpc.height = height; const tctx2 = tmpc.getContext('2d');
-    for(const layer of layers){ if(!layer.visible) continue; tctx2.globalAlpha = layer.opacity; tctx2.drawImage(layer.canvas, layer.offset.x, layer.offset.y); }
-    tctx2.globalAlpha = 1;
+    if(!isPointInsideDocument(pos)){ addStatus('Click inside the canvas to create a mask.', 'warning'); return; }
+    const tmpc = document.createElement('canvas'); tmpc.width = width; tmpc.height = height; const tctx2 = tmpc.getContext('2d', { willReadFrequently: true });
+    renderFlattenedToContext(tctx2);
     const compImg = tctx2.getImageData(0,0,width,height);
     const mask = floodFillMask(compImg, Math.round(pos.x), Math.round(pos.y));
     // create mask canvas
@@ -1454,6 +1530,10 @@ view.addEventListener('mousedown', (e)=>{
 
   if(tool === 'text'){
     const pos = getPos(e);
+    if(!isPointInsideDocument(pos)){
+      addStatus('Click inside the canvas to add text.', 'warning', 2200);
+      return;
+    }
     if(currentTextEditor){
       try{ currentTextEditor.commit(); }catch(err){ currentTextEditor = null; }
     }
@@ -1474,10 +1554,9 @@ view.addEventListener('mousedown', (e)=>{
     if(!activeLayer) return;
     const useComposite = !!window.fillUseComposite;
     if(useComposite){
-      // compute mask on composite and apply it to active layer
-      const tmp = document.createElement('canvas'); tmp.width = width; tmp.height = height; const tctx = tmp.getContext('2d');
-      for(const layer of layers){ if(!layer.visible) continue; tctx.globalAlpha = layer.opacity; tctx.drawImage(layer.canvas, layer.offset.x, layer.offset.y); }
-      tctx.globalAlpha = 1;
+      if(!isPointInsideDocument(pos)) return;
+      const tmp = document.createElement('canvas'); tmp.width = width; tmp.height = height; const tctx = tmp.getContext('2d', { willReadFrequently: true });
+      renderFlattenedToContext(tctx);
       const compImg = tctx.getImageData(0,0,width,height);
       const mask = floodFillMask(compImg, Math.round(pos.x), Math.round(pos.y));
       applyMaskToLayer(mask, width, height, activeLayer, color);
@@ -1500,6 +1579,7 @@ view.addEventListener('mousedown', (e)=>{
   // Determine if we should edit the mask or the main layer
   const isEditingMask = editMaskMode && activeLayer.maskCanvas && (tool === 'brush' || tool === 'eraser');
   const ctx = isEditingMask ? activeLayer.maskCanvas.getContext('2d') : activeLayer.ctx;
+  drawingSession = { ctx, layer: activeLayer, isEditingMask, changed: false };
   
   ctx.lineJoin = ctx.lineCap = 'round';
   ctx.lineWidth = size;
@@ -1520,10 +1600,20 @@ view.addEventListener('mousedown', (e)=>{
   const adjY = isEditingMask ? last.y : last.y - activeLayer.offset.y;
   
   ctx.beginPath(); ctx.moveTo(adjX, adjY);
+  if(tool === 'brush' || tool === 'eraser'){
+    ctx.beginPath();
+    ctx.arc(adjX, adjY, Math.max(0.5, size / 2), 0, Math.PI * 2);
+    if(tool === 'eraser') ctx.fill();
+    else { ctx.fillStyle = isEditingMask ? '#ffffff' : color; ctx.fill(); }
+    ctx.beginPath(); ctx.moveTo(adjX, adjY);
+    drawingSession.changed = true;
+    composite();
+  }
 });
 
-view.addEventListener('mousemove', (e)=>{
+view.addEventListener('pointermove', (e)=>{
   updateCursorFeedback(e.clientX, e.clientY);
+  if(activePointerId != null && e.pointerId !== activePointerId) return;
   const pos = getPos(e);
   // handle transform dragging
   if(transformState && transformState.dragging){
@@ -1540,16 +1630,16 @@ view.addEventListener('mousemove', (e)=>{
   }
   if(!drawing) return;
   
-  // Only allow drawing with left mouse button (button 0)
-  // This prevents right-click and middle-click from activating drawing tools
-  if(e.buttons !== 1) return;
+  if(e.pointerType === 'mouse' && (e.buttons & 1) !== 1) return;
   
   // allow selection/crop to update even when no active layer exists
   if(tool === 'select' || tool === 'crop'){
     if(!selection) return;
     // update CSS overlay using viewport-space coordinates (client pixels)
     const vpRect = viewport.getBoundingClientRect();
-    const curVP = { x: e.clientX - vpRect.left, y: e.clientY - vpRect.top };
+    const boundedPos = clampPointToDocument(pos);
+    const boundedPage = canvasToPagePosition(boundedPos.x, boundedPos.y);
+    const curVP = { x: boundedPage.left - vpRect.left, y: boundedPage.top - vpRect.top };
     const left = Math.min(selection.startVP.x, curVP.x);
     const top = Math.min(selection.startVP.y, curVP.y);
     const wcss = Math.abs(curVP.x - selection.startVP.x);
@@ -1558,10 +1648,10 @@ view.addEventListener('mousemove', (e)=>{
     if(selDiv){ selDiv.style.left = left + 'px'; selDiv.style.top = top + 'px'; selDiv.style.width = wcss + 'px'; selDiv.style.height = hcss + 'px'; }
     // also update logical canvas-space selection values for crop/selection logic
     const s = selection.startCanvas || selection.start;
-    selection.x = Math.min(s.x, pos.x);
-    selection.y = Math.min(s.y, pos.y);
-    selection.w = Math.abs(pos.x - s.x);
-    selection.h = Math.abs(pos.y - s.y);
+    selection.x = Math.min(s.x, boundedPos.x);
+    selection.y = Math.min(s.y, boundedPos.y);
+    selection.w = Math.abs(boundedPos.x - s.x);
+    selection.h = Math.abs(boundedPos.y - s.y);
     return;
   }
   // remaining drawing tools require an active layer
@@ -1584,12 +1674,15 @@ view.addEventListener('mousemove', (e)=>{
   
   ctx.lineTo(adjX, adjY);
   ctx.stroke(); composite();
+  if(drawingSession) drawingSession.changed = true;
   last = pos;
 });
 
-view.addEventListener('mouseleave', ()=> updateCursorFeedback());
+view.addEventListener('pointerleave', ()=> updateCursorFeedback());
 
-window.addEventListener('mouseup', ()=>{
+function finishPointerInteraction(e){
+  if(activePointerId != null && e.pointerId != null && e.pointerId !== activePointerId) return;
+  activePointerId = null;
   // handle transform mouseup
   if(transformState && transformState.dragging){
     transformState.dragging = false;
@@ -1610,7 +1703,7 @@ window.addEventListener('mouseup', ()=>{
         cctx.drawImage(activeLayer.canvas, sx, sy, sw, sh, 0,0,sw,sh);
         // clear area on original layer
         activeLayer.ctx.clearRect(sx, sy, sw, sh);
-        const newLayer = {canvas:c, ctx:cctx, name:'Selection', offset:{x: Math.round(s.x), y: Math.round(s.y)}, visible:true, opacity:1};
+        const newLayer = {canvas:c, ctx:cctx, name:'Selection', offset:{x: Math.round(s.x), y: Math.round(s.y)}, visible:true, opacity:1, blend:'source-over', maskCanvas:null, locked:false, role:null};
         layers.push(newLayer);
         activeLayer = newLayer;
         renderLayersUI(); composite();
@@ -1638,9 +1731,7 @@ window.addEventListener('mouseup', ()=>{
 
   try{
     // Restore the appropriate context based on whether we were editing a mask
-    const isEditingMask = activeLayer.maskCanvas && (tool === 'brush' || tool === 'eraser');
-    const ctx = isEditingMask ? activeLayer.maskCanvas.getContext('2d') : activeLayer.ctx;
-    ctx.restore();
+    if(drawingSession?.ctx) drawingSession.ctx.restore();
   }catch(e){}
   if(tool === 'move'){
     if(moveInteraction){
@@ -1655,10 +1746,14 @@ window.addEventListener('mouseup', ()=>{
       }
     }
     moveInteraction = null;
+    drawingSession = null;
     return;
   }
-  pushHistory(tool === 'brush' ? 'Brush Stroke' : 'Erase Stroke');
-});
+  if(drawingSession?.changed) pushHistory(tool === 'brush' ? 'Brush Stroke' : 'Erase Stroke');
+  drawingSession = null;
+}
+view.addEventListener('pointerup', finishPointerInteraction);
+view.addEventListener('pointercancel', finishPointerInteraction);
 
 // UI bindings
 document.getElementById('tool-brush').addEventListener('click', ()=> selectTool('brush'));
@@ -1681,6 +1776,9 @@ function selectTool(t){
   if(cropPending && t !== 'crop'){
     try{ cancelCrop(); }catch(e){ cropPending = false; }
   }
+  if(transformState && t !== 'transform'){
+    try{ cancelTransform(false); }catch(e){ transformState = null; }
+  }
   tool = t;
   document.querySelectorAll('.tool').forEach(b=>b.classList.remove('active'));
   const btn = document.getElementById('tool-'+t);
@@ -1697,18 +1795,18 @@ function renderToolProps(){
 
   if(tool === 'brush'){
     const colorBlk = createBlock('Color');
-    const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value = color; colorInput.oninput = (e)=> color = e.target.value;
+    const colorInput = document.createElement('input'); colorInput.type='color'; colorInput.value = color; colorInput.setAttribute('aria-label','Brush color'); colorInput.oninput = (e)=> color = e.target.value;
     colorBlk.appendChild(colorInput);
 
     const sizeBlk = createBlock('Size');
     const sizeRow = document.createElement('div'); sizeRow.className = 'prop-control-row';
-    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
+    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.setAttribute('aria-label','Brush size'); sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
     const sizeVal = document.createElement('div'); sizeVal.className='prop-value'; sizeVal.textContent = size;
     sizeRow.appendChild(sizeRange); sizeRow.appendChild(sizeVal); sizeBlk.appendChild(sizeRow);
 
     const opBlk = createBlock('Opacity');
     const opRow = document.createElement('div'); opRow.className='prop-control-row';
-    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
+    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.setAttribute('aria-label','Brush opacity'); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
     const opVal = document.createElement('div'); opVal.className='prop-value'; opVal.textContent = Math.round(toolOpacity*100) + '%';
     opRow.appendChild(opRange); opRow.appendChild(opVal); opBlk.appendChild(opRow);
 
@@ -1733,12 +1831,12 @@ function renderToolProps(){
   } else if(tool === 'eraser'){
     const sizeBlk = createBlock('Size');
     const sizeRow = document.createElement('div'); sizeRow.className = 'prop-control-row';
-    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
+    const sizeRange = document.createElement('input'); sizeRange.type='range'; sizeRange.min=1; sizeRange.max=200; sizeRange.value = size; sizeRange.setAttribute('aria-label','Eraser size'); sizeRange.oninput = (e)=>{ size = Number(e.target.value); sizeVal.textContent = size; };
     const sizeVal = document.createElement('div'); sizeVal.className='prop-value'; sizeVal.textContent = size;
     sizeRow.appendChild(sizeRange); sizeRow.appendChild(sizeVal); sizeBlk.appendChild(sizeRow);
     const opBlk = createBlock('Opacity');
     const opRow = document.createElement('div'); opRow.className='prop-control-row';
-    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
+    const opRange = document.createElement('input'); opRange.type='range'; opRange.min=0; opRange.max=100; opRange.value = Math.round(toolOpacity*100); opRange.setAttribute('aria-label','Eraser opacity'); opRange.oninput = (e)=>{ toolOpacity = Number(e.target.value)/100; opVal.textContent = e.target.value + '%'; };
     const opVal = document.createElement('div'); opVal.className='prop-value'; opVal.textContent = Math.round(toolOpacity*100) + '%';
     opRow.appendChild(opRange); opRow.appendChild(opVal); opBlk.appendChild(opRow);
 
@@ -1844,7 +1942,13 @@ function renderToolProps(){
 }
 
 // --- Color helper functions ---
-function hexToRgb(hex){ hex = hex.replace('#',''); if(hex.length===3) hex = hex.split('').map(c=>c+c).join(''); const num = parseInt(hex,16); return {r:(num>>16)&255, g:(num>>8)&255, b:num&255}; }
+function hexToRgb(hex){
+  const normalized = String(hex || '').trim().replace('#','');
+  if(!/^([0-9a-f]{3}|[0-9a-f]{6})$/i.test(normalized)) throw new Error('Invalid hex color.');
+  const expanded = normalized.length === 3 ? normalized.split('').map(c=>c+c).join('') : normalized;
+  const num = parseInt(expanded,16);
+  return {r:(num>>16)&255, g:(num>>8)&255, b:num&255};
+}
 function rgbToHex(r,g,b){ return '#'+[r,g,b].map(v=>v.toString(16).padStart(2,'0')).join(''); }
 function rgbToHsv(r,g,b){ r/=255;g/=255;b/=255; const max=Math.max(r,g,b), min=Math.min(r,g,b); const d=max-min; let h=0; if(d){ if(max===r) h= (g-b)/d + (g<b?6:0); else if(max===g) h= (b-r)/d + 2; else h= (r-g)/d + 4; h/=6;} const s = max===0?0:d/max; const v = max; return {h:h*360, s:s, v:v}; }
 function hsvToRgb(h,s,v){ h = (h%360+360)%360; const c = v*s; const x = c*(1-Math.abs((h/60)%2 -1)); const m = v-c; let r=0,g=0,b=0; if(h<60){ r=c; g=x; b=0;} else if(h<120){ r=x; g=c; b=0;} else if(h<180){ r=0; g=c; b=x;} else if(h<240){ r=0; g=x; b=c;} else if(h<300){ r=x; g=0; b=c;} else { r=c; g=0; b=x; } return {r:Math.round((r+m)*255), g:Math.round((g+m)*255), b:Math.round((b+m)*255)}; }
@@ -1855,6 +1959,7 @@ function createColorPicker(initialHex, onChange){
   const hue = document.createElement('input'); hue.type='range'; hue.className='cp-hue'; hue.min=0; hue.max=360; hue.value=0;
   const controls = document.createElement('div'); controls.className='cp-controls';
   const hexIn = document.createElement('input'); hexIn.className='cp-hex'; hexIn.value = initialHex;
+  hexIn.setAttribute('aria-label', 'Hex color');
   const swatch = document.createElement('div'); swatch.className='cp-swatch'; swatch.style.background = initialHex;
   controls.appendChild(hexIn); controls.appendChild(swatch);
   const recent = document.createElement('div'); recent.className='cp-recent'; // placeholder
@@ -1887,12 +1992,19 @@ function createColorPicker(initialHex, onChange){
     const y = Math.max(0, Math.min(sv.height, (e.clientY-rect.top) * (sv.height/rect.height)));
     hsv.s = x / sv.width; hsv.v = 1 - (y / sv.height); updateUI();
   }
-  let svDown = false; sv.addEventListener('mousedown', (e)=>{ svDown=true; svPointer(e); }); window.addEventListener('mousemove', (e)=>{ if(svDown) svPointer(e); }); window.addEventListener('mouseup', ()=>{ svDown=false; });
-  sv.addEventListener('touchstart', (e)=>{ svPointer(e.touches[0]); e.preventDefault(); }, { passive: false });
-  sv.addEventListener('touchmove',(e)=>{ svPointer(e.touches[0]); e.preventDefault(); }, { passive: false });
+  let svPointerId = null;
+  sv.addEventListener('pointerdown', (e)=>{
+    svPointerId = e.pointerId;
+    try{ sv.setPointerCapture(e.pointerId); }catch(err){}
+    svPointer(e); e.preventDefault();
+  });
+  sv.addEventListener('pointermove', (e)=>{ if(e.pointerId === svPointerId) svPointer(e); });
+  const releaseSv = (e)=>{ if(e.pointerId === svPointerId) svPointerId = null; };
+  sv.addEventListener('pointerup', releaseSv);
+  sv.addEventListener('pointercancel', releaseSv);
 
   hue.addEventListener('input', (e)=>{ hsv.h = Number(e.target.value); updateUI(); });
-  hexIn.addEventListener('change', (e)=>{ try{ const rgb = hexToRgb(e.target.value); const h = rgbToHsv(rgb.r,rgb.g,rgb.b); hsv = h; updateUI(); }catch(err){} });
+  hexIn.addEventListener('change', (e)=>{ try{ const rgb = hexToRgb(e.target.value); const h = rgbToHsv(rgb.r,rgb.g,rgb.b); hsv = h; hexIn.removeAttribute('aria-invalid'); updateUI(); }catch(err){ hexIn.setAttribute('aria-invalid', 'true'); addStatus('Enter a valid 3 or 6 digit hex color.', 'warning', 2200); } });
 
   // initial draw
   updateUI();
@@ -1905,6 +2017,8 @@ function colorMatch(data, idx, r,g,b,a){ return data[idx]===r && data[idx+1]===g
 function floodFillMask(imageData, startX, startY){
   const w = imageData.width, h = imageData.height; const data = imageData.data;
   const mask = new Uint8Array(w*h);
+  startX = Math.round(startX); startY = Math.round(startY);
+  if(startX < 0 || startY < 0 || startX >= w || startY >= h) return mask;
   const startIdx = (startY * w + startX) * 4;
   const sr = data[startIdx], sg = data[startIdx+1], sb = data[startIdx+2], sa = data[startIdx+3];
   const stack = [startX, startY];
@@ -1913,7 +2027,7 @@ function floodFillMask(imageData, startX, startY){
 }
 
 function applyMaskToColor(mask, w, h, fillColor){
-  const out = document.createElement('canvas'); out.width = w; out.height = h; const octx = out.getContext('2d'); const img = octx.createImageData(w,h); const data = img.data; const [fr,fg,fb] = hexToRgb(fillColor?fillColor:'#000');
+  const out = document.createElement('canvas'); out.width = w; out.height = h; const octx = out.getContext('2d'); const img = octx.createImageData(w,h); const data = img.data; const [fr,fg,fb] = Object.values(hexToRgb(fillColor?fillColor:'#000'));
   for(let i=0;i<w*h;i++){ if(mask[i]){ const idx = i*4; data[idx]=fr; data[idx+1]=fg; data[idx+2]=fb; data[idx+3]=255; } }
   octx.putImageData(img,0,0); return out;
 }
@@ -1931,16 +2045,14 @@ function floodFillLayerAt(layer, pageX, pageY, fillHex){
 }
 
 function floodFillCompositeAt(pageX, pageY, fillHex){
-  // build composite imageData
-  const tmp = document.createElement('canvas'); tmp.width = width; tmp.height = height; const tctx = tmp.getContext('2d');
-  for(const layer of layers){ if(!layer.visible) continue; tctx.globalAlpha = layer.opacity; tctx.drawImage(layer.canvas, layer.offset.x, layer.offset.y); }
-  tctx.globalAlpha = 1;
+  const tmp = document.createElement('canvas'); tmp.width = width; tmp.height = height; const tctx = tmp.getContext('2d', { willReadFrequently: true });
+  renderFlattenedToContext(tctx);
   const img = tctx.getImageData(0,0,width,height);
   const mask = floodFillMask(img, Math.round(pageX), Math.round(pageY));
   const filled = applyMaskToColor(mask, width, height, fillHex);
   // add new layer with filled pixels
   const newCanvas = document.createElement('canvas'); newCanvas.width = width; newCanvas.height = height; const nctx = newCanvas.getContext('2d'); nctx.drawImage(filled,0,0);
-  const newLayer = {canvas:newCanvas, ctx:newCanvas.getContext('2d'), name:'Fill', offset:{x:0,y:0}, visible:true, opacity:1};
+  const newLayer = {canvas:newCanvas, ctx:newCanvas.getContext('2d'), name:'Fill', offset:{x:0,y:0}, visible:true, opacity:1, blend:'source-over', maskCanvas:null, locked:false, role:null};
   layers.push(newLayer); activeLayer = newLayer; renderLayersUI(); composite(); pushHistory();
 }
 
@@ -1951,7 +2063,7 @@ function applyMaskToLayer(mask, maskW, maskH, layer, fillHex){
   const [fr,fg,fb] = Object.values(hexToRgb(fillHex));
   for(let y=0;y<lh;y++){
     for(let x=0;x<lw;x++){
-      const gx = layer.offset.x + x; const gy = layer.offset.y + y;
+      const gx = Math.round(layer.offset.x + x); const gy = Math.round(layer.offset.y + y);
       if(gx < 0 || gy < 0 || gx >= maskW || gy >= maskH) continue;
       const mi = gy * maskW + gx;
       if(mask[mi]){
@@ -2009,8 +2121,21 @@ document.getElementById('zoom-100')?.addEventListener('click', ()=> setActualSiz
 document.getElementById('close-resize-modal').addEventListener('click', closeResizeModal);
 document.getElementById('cancel-resize').addEventListener('click', closeResizeModal);
 document.getElementById('confirm-resize').addEventListener('click', confirmResize);
+document.getElementById('resize-modal').addEventListener('pointerdown', (e)=>{
+  if(e.target === e.currentTarget) closeResizeModal();
+});
+document.getElementById('resize-modal').addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape'){ e.preventDefault(); closeResizeModal(); return; }
+  if(e.key !== 'Tab') return;
+  const focusable = [...e.currentTarget.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter(el=> !el.disabled);
+  if(!focusable.length) return;
+  const first = focusable[0], lastFocusable = focusable[focusable.length - 1];
+  if(e.shiftKey && document.activeElement === first){ e.preventDefault(); lastFocusable.focus(); }
+  else if(!e.shiftKey && document.activeElement === lastFocusable){ e.preventDefault(); first.focus(); }
+});
 
 let syncingResizeInputs = false;
+let resizeDialogTrigger = null;
 
 function syncResizeFromWidth(){
   const maintainAspect = document.getElementById('maintain-aspect');
@@ -2054,12 +2179,53 @@ function resizeCanvas(){
   if(maintainAspect.checked) syncResizeFromWidth();
   
   // Show modal
+  resizeDialogTrigger = document.activeElement;
   modal.style.display = 'block';
+  modal.setAttribute('aria-hidden', 'false');
+  document.querySelector('header')?.setAttribute('inert', '');
+  document.querySelector('main')?.setAttribute('inert', '');
+  window.setTimeout(()=> widthInput.focus(), 0);
 }
 
 // Close resize modal
 function closeResizeModal() {
-  document.getElementById('resize-modal').style.display = 'none';
+  const modal = document.getElementById('resize-modal');
+  modal.style.display = 'none';
+  modal.setAttribute('aria-hidden', 'true');
+  document.querySelector('header')?.removeAttribute('inert');
+  document.querySelector('main')?.removeAttribute('inert');
+  try{ resizeDialogTrigger?.focus(); }catch(e){}
+}
+
+function resizeDocumentTo(newWidth, newHeight){
+  const validationError = validateCanvasSize(newWidth, newHeight);
+  if(validationError) throw new Error(validationError);
+  const prepared = layers.map((layer)=>{
+    let nextCanvas = layer.canvas;
+    if(layer.role === 'background'){
+      nextCanvas = document.createElement('canvas'); nextCanvas.width = newWidth; nextCanvas.height = newHeight;
+      const nextCtx = nextCanvas.getContext('2d');
+      nextCtx.fillStyle = '#ffffff'; nextCtx.fillRect(0, 0, newWidth, newHeight);
+      nextCtx.drawImage(layer.canvas, 0, 0);
+    }
+    let nextMask = null;
+    if(layer.maskCanvas){
+      nextMask = document.createElement('canvas'); nextMask.width = newWidth; nextMask.height = newHeight;
+      const maskCtx = nextMask.getContext('2d');
+      maskCtx.fillStyle = '#ffffff'; maskCtx.fillRect(0, 0, newWidth, newHeight);
+      maskCtx.clearRect(0, 0, Math.min(newWidth, layer.maskCanvas.width), Math.min(newHeight, layer.maskCanvas.height));
+      maskCtx.drawImage(layer.maskCanvas, 0, 0);
+    }
+    return { layer, nextCanvas, nextMask };
+  });
+  width = newWidth; height = newHeight;
+  prepared.forEach(({layer, nextCanvas, nextMask})=>{
+    layer.canvas = nextCanvas;
+    layer.ctx = nextCanvas.getContext('2d');
+    if(layer.maskCanvas) layer.maskCanvas = nextMask;
+  });
+  updateViewportAspect();
+  updateCanvasSizeDisplay();
 }
 
 // Confirm resize and apply changes
@@ -2070,92 +2236,39 @@ function confirmResize() {
   const newWidth = parseInt(widthInput.value);
   const newHeight = parseInt(heightInput.value);
   
-  if (isNaN(newWidth) || isNaN(newHeight) || newWidth <= 0 || newHeight <= 0) {
-    addStatus('Please enter valid canvas dimensions.', 'warning');
+  const validationError = validateCanvasSize(newWidth, newHeight);
+  if (validationError) {
+    addStatus(validationError, 'warning', 3200);
     return;
   }
-  
-  // Update the canvas dimensions
-  width = newWidth;
-  height = newHeight;
-  try{ updateViewportAspect(); }catch(e){}
-  
-  // Resize each layer's canvas
-  for (const layer of layers) {
-    const newCanvas = document.createElement('canvas');
-    newCanvas.width = width;
-    newCanvas.height = height;
-    const newCtx = newCanvas.getContext('2d');
-    // If this is a background layer, preserve background fill (white)
-    const isBackground = layer.name && String(layer.name).toLowerCase().includes('background');
-    if (isBackground) {
-      newCtx.save();
-      newCtx.fillStyle = '#ffffff';
-      newCtx.fillRect(0, 0, newCanvas.width, newCanvas.height);
-      newCtx.restore();
-    }
-
-    // Draw the existing layer content onto the new canvas (keeps existing pixels at 0,0)
-    try { newCtx.drawImage(layer.canvas, 0, 0); } catch (e) { /* ignore */ }
-
-    // Replace layer canvas/context
-    layer.canvas = newCanvas;
-    layer.ctx = newCtx;
-
-    // Resize maskCanvas if present (masks default to white)
-    if (layer.maskCanvas) {
-      const newMask = document.createElement('canvas');
-      newMask.width = width; newMask.height = height;
-      const mctx = newMask.getContext('2d');
-      // fill mask with white (visible) by default, then draw existing mask
-      mctx.save(); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,newMask.width,newMask.height); mctx.restore();
-      try { mctx.drawImage(layer.maskCanvas, 0, 0); } catch(e) { /* ignore */ }
-      layer.maskCanvas = newMask;
-    }
+  try{
+    resizeDocumentTo(newWidth, newHeight);
+  }catch(error){
+    addStatus(error.message || 'Canvas could not be resized.', 'warning', 3200);
+    return;
   }
-  
   composite();
   pushHistory('Resize Canvas');
   addStatus('Canvas resized. Undo restores the previous size.', 'warning', 3200);
   
-  // Update UI display for canvas size
-  try{ updateCanvasSizeDisplay(); }catch(e){}
-
-  // Close modal
   closeResizeModal();
 }
 
 function handleFile(e){
   const f = e.target.files[0]; if(!f) return;
+  const objectUrl = URL.createObjectURL(f);
   const img = new Image(); img.onload = ()=>{
+    URL.revokeObjectURL(objectUrl);
+    fileInput.value = '';
     // If user requested, resize the canvas to the imported image size first
     const resizeCheckbox = document.getElementById('import-resize');
     const resizeToImage = resizeCheckbox && resizeCheckbox.checked;
     if(resizeToImage){
       const newWidth = img.width; const newHeight = img.height;
-      // Update view dimensions
-      width = newWidth; height = newHeight;
-      try{ updateViewportAspect(); }catch(e){}
-
-      // Resize each layer's canvas and masks similar to confirmResize
-      for (const layer of layers) {
-        const newCanvas = document.createElement('canvas');
-        newCanvas.width = width; newCanvas.height = height;
-        const newCtx = newCanvas.getContext('2d');
-        const isBackground = layer.name && String(layer.name).toLowerCase().includes('background');
-        if (isBackground) {
-          newCtx.save(); newCtx.fillStyle = '#ffffff'; newCtx.fillRect(0, 0, newCanvas.width, newCanvas.height); newCtx.restore();
-        }
-        try { newCtx.drawImage(layer.canvas, 0, 0); } catch (e) { /* ignore */ }
-        layer.canvas = newCanvas; layer.ctx = newCtx;
-        if (layer.maskCanvas) {
-          const newMask = document.createElement('canvas'); newMask.width = width; newMask.height = height; const mctx = newMask.getContext('2d');
-          mctx.save(); mctx.fillStyle = '#fff'; mctx.fillRect(0,0,newMask.width,newMask.height); mctx.restore();
-          try { mctx.drawImage(layer.maskCanvas, 0, 0); } catch(e) { /* ignore */ }
-          layer.maskCanvas = newMask;
-        }
-      }
-      try{ updateCanvasSizeDisplay(); }catch(e){}
+      const validationError = validateCanvasSize(newWidth, newHeight);
+      if(validationError){ addStatus(validationError, 'warning', 3400); return; }
+      try{ resizeDocumentTo(newWidth, newHeight); }
+      catch(error){ addStatus(error.message || 'Image dimensions are too large.', 'warning', 3400); return; }
       // Reset viewport transform so the view refits after resizing
       resetViewportTransform();
     }
@@ -2180,19 +2293,37 @@ function handleFile(e){
     pushHistory('Import Image');
     addStatus('Image imported.', 'info', 1800);
   };
-  img.src = URL.createObjectURL(f);
+  img.onerror = ()=>{
+    URL.revokeObjectURL(objectUrl);
+    fileInput.value = '';
+    addStatus('The selected image could not be opened.', 'warning', 3200);
+  };
+  img.src = objectUrl;
 }
 
 function exportPNG(){
   const out = document.createElement('canvas'); out.width = width; out.height = height; const octx = out.getContext('2d');
   renderFlattenedToContext(octx);
-  const a = document.createElement('a'); a.download = 'photoeasy-export.png'; a.href = out.toDataURL('image/png'); a.click();
+  out.toBlob((blob)=>{
+    if(!blob){ addStatus('PNG export failed.', 'warning', 2600); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.download = 'photoeasy-export.png'; a.href = url; a.click();
+    window.setTimeout(()=> URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
 }
 
 // Transform: simple scale/rotate of active layer via prompt
 function doTransform(){
+  if(transformState){
+    tool = 'transform'; renderToolProps(); composite();
+    return;
+  }
   if(!activeLayer){
     addStatus('Select a layer before transforming.', 'warning');
+    return;
+  }
+  if(activeLayer.locked){
+    addStatus('Layer is locked. Unlock it to transform.', 'warning', 2800);
     return;
   }
   // commit any active text edits before entering transform
@@ -2207,13 +2338,26 @@ function doTransform(){
 }
 
 function startTransform(layer){
-  if(!layer) return;
+  if(!layer || layer.locked) return;
   // compute tight content bounds for the layer (ignore fully transparent areas)
   const bounds = getLayerContentBounds(layer);
   // create a cropped canvas of the layer content we will transform
   const bboxCanvas = document.createElement('canvas'); bboxCanvas.width = Math.max(1, bounds.w); bboxCanvas.height = Math.max(1, bounds.h);
   const bctx = bboxCanvas.getContext('2d');
   try{ bctx.drawImage(layer.canvas, bounds.x, bounds.y, bounds.w, bounds.h, 0, 0, bounds.w, bounds.h); }catch(e){}
+  let bboxMaskCanvas = null;
+  if(layer.maskCanvas){
+    bboxMaskCanvas = document.createElement('canvas'); bboxMaskCanvas.width = Math.max(1, bounds.w); bboxMaskCanvas.height = Math.max(1, bounds.h);
+    const bmctx = bboxMaskCanvas.getContext('2d');
+    bmctx.drawImage(layer.maskCanvas, layer.offset.x + bounds.x, layer.offset.y + bounds.y, bounds.w, bounds.h, 0, 0, bounds.w, bounds.h);
+  }
+  const previewCanvas = cloneCanvas(bboxCanvas);
+  if(bboxMaskCanvas){
+    const pctx = previewCanvas.getContext('2d');
+    pctx.globalCompositeOperation = 'destination-in';
+    pctx.drawImage(bboxMaskCanvas, 0, 0);
+    pctx.globalCompositeOperation = 'source-over';
+  }
 
   transformState = {
     layer,
@@ -2226,6 +2370,8 @@ function startTransform(layer){
     startScale:1,
     bounds,
     bboxCanvas,
+    bboxMaskCanvas,
+    previewCanvas,
     // snapshot original offset so we can compute placement
     origOffset: { x: layer.offset.x, y: layer.offset.y }
   };
@@ -2243,103 +2389,54 @@ function transformKeyHandler(e){
   }
 }
 
-function cancelTransform(){
-  transformState = null; window.removeEventListener('keydown', transformKeyHandler); composite(); renderToolProps(); addStatus('Transform canceled.', 'info', 1600);
+function cancelTransform(showToast = true){
+  if(transformState?.layer && transformState.origOffset){
+    transformState.layer.offset = { ...transformState.origOffset };
+  }
+  transformState = null;
+  window.removeEventListener('keydown', transformKeyHandler);
+  composite(); renderToolProps();
+  if(showToast) addStatus('Transform canceled.', 'info', 1600);
 }
 
 function commitTransform(){
   if(!transformState) return;
   const ts = transformState; const l = ts.layer;
-  
-  // Calculate the visual center of the transformed content
-  // The center point relative to the layer's canvas
-  const centerX = ts.bounds.x + ts.bounds.w/2;
-  const centerY = ts.bounds.y + ts.bounds.h/2;
-  
-  // Calculate the new bounding box after transformation
-  // Get the corners of the original bounding box
-  const corners = [
-    {x: ts.bounds.x, y: ts.bounds.y},
-    {x: ts.bounds.x + ts.bounds.w, y: ts.bounds.y},
-    {x: ts.bounds.x + ts.bounds.w, y: ts.bounds.y + ts.bounds.h},
-    {x: ts.bounds.x, y: ts.bounds.y + ts.bounds.h}
-  ];
-  
-  // Apply rotation and scaling to each corner
-  const transformedCorners = corners.map(c => {
-    // Translate to origin (relative to center)
-    const tx = c.x - centerX;
-    const ty = c.y - centerY;
-    
-    // Apply rotation
-    const rx = tx * Math.cos(ts.rotation) - ty * Math.sin(ts.rotation);
-    const ry = tx * Math.sin(ts.rotation) + ty * Math.cos(ts.rotation);
-    
-    // Apply scaling
-    const sx = rx * ts.scale;
-    const sy = ry * ts.scale;
-    
-    // Translate back
-    return {
-      x: centerX + sx,
-      y: centerY + sy
-    };
-  });
-  
-  // Find the new bounding box
-  const minX = Math.min(...transformedCorners.map(c => c.x));
-  const maxX = Math.max(...transformedCorners.map(c => c.x));
-  const minY = Math.min(...transformedCorners.map(c => c.y));
-  const maxY = Math.max(...transformedCorners.map(c => c.y));
-  
-  const newBounds = {
-    x: minX,
-    y: minY,
-    w: maxX - minX,
-    h: maxY - minY
-  };
-  
-  // Calculate the offset adjustment to keep the visual center in the same place
-  const newCenterX = newBounds.x + newBounds.w/2;
-  const newCenterY = newBounds.y + newBounds.h/2;
-  
-  // Calculate the adjustment needed to keep the visual center in the same absolute position
-  // Convert to absolute coordinates for the adjustment calculation
-  const absCenterX = l.offset.x + centerX;
-  const absCenterY = l.offset.y + centerY;
-  const absNewCenterX = l.offset.x + newCenterX;
-  const absNewCenterY = l.offset.y + newCenterY;
-  
-  const offsetAdjustX = (absCenterX - absNewCenterX);
-  const offsetAdjustY = (absCenterY - absNewCenterY);
-  
-  // Update the layer's offset to compensate for the transformation
-  l.offset.x += offsetAdjustX;
-  l.offset.y += offsetAdjustY;
-  
-  // Create an output canvas same size as the layer to preserve layer dimensions
-  const out = document.createElement('canvas'); out.width = l.canvas.width; out.height = l.canvas.height;
-  const octx = out.getContext('2d');
-  // copy original content except the area covered by the original bbox (we will replace it)
-  octx.drawImage(l.canvas, 0, 0);
-  // clear original bbox area
-  octx.clearRect(ts.bounds.x, ts.bounds.y, ts.bounds.w, ts.bounds.h);
+  const scaledW = ts.bounds.w * ts.scale;
+  const scaledH = ts.bounds.h * ts.scale;
+  const cos = Math.abs(Math.cos(ts.rotation));
+  const sin = Math.abs(Math.sin(ts.rotation));
+  const outW = Math.max(1, Math.ceil(scaledW * cos + scaledH * sin));
+  const outH = Math.max(1, Math.ceil(scaledW * sin + scaledH * cos));
+  const sizeError = validateCanvasSize(outW, outH, 1);
+  if(sizeError){ addStatus(sizeError, 'warning', 3200); return; }
 
-  // draw transformed bboxCanvas into the correct place
-  octx.save();
-  // compute center point in canvas coords where bbox center should be
-  // This should be relative to the layer's canvas
-  const cx = centerX;
-  const cy = centerY;
-  octx.translate(cx, cy);
+  const absoluteCenterX = l.offset.x + ts.bounds.x + ts.bounds.w / 2;
+  const absoluteCenterY = l.offset.y + ts.bounds.y + ts.bounds.h / 2;
+  const out = document.createElement('canvas'); out.width = outW; out.height = outH;
+  const octx = out.getContext('2d');
+  octx.translate(outW / 2, outH / 2);
   octx.rotate(ts.rotation);
   octx.scale(ts.scale, ts.scale);
-  // draw bbox centered
-  octx.drawImage(ts.bboxCanvas, -ts.bounds.w/2, -ts.bounds.h/2);
-  octx.restore();
+  octx.drawImage(ts.bboxCanvas, -ts.bounds.w / 2, -ts.bounds.h / 2);
 
-  // replace layer canvas with out
-  l.canvas = out; l.ctx = out.getContext('2d');
+  let transformedMask = null;
+  if(ts.bboxMaskCanvas){
+    transformedMask = document.createElement('canvas'); transformedMask.width = width; transformedMask.height = height;
+    const tmctx = transformedMask.getContext('2d');
+    tmctx.translate(absoluteCenterX, absoluteCenterY);
+    tmctx.rotate(ts.rotation);
+    tmctx.scale(ts.scale, ts.scale);
+    tmctx.drawImage(ts.bboxMaskCanvas, -ts.bounds.w / 2, -ts.bounds.h / 2);
+  }
+
+  l.canvas = out;
+  l.ctx = out.getContext('2d');
+  l.offset = { x: absoluteCenterX - outW / 2, y: absoluteCenterY - outH / 2 };
+  l.maskCanvas = transformedMask;
+  if(l.type === 'text'){
+    l.type = null; l.text = null; l.font = null; l.color = null; l.fontSize = null; l.fontFamily = null; l.bold = false;
+  }
   transformState = null; window.removeEventListener('keydown', transformKeyHandler);
   pushHistory('Transform Layer'); renderLayersUI(); composite(); renderToolProps(); addStatus('Transform applied.', 'info', 1800);
 }
@@ -2375,7 +2472,10 @@ function commitCrop(){
       if(layer.maskCanvas){
         layer.maskCanvas = cropCanvasRegion(layer.maskCanvas, sx, sy, sw, sh);
       }
-      layer.canvas = newC; layer.ctx = nctx; layer.offset.x = layer.offset.x - sx; layer.offset.y = layer.offset.y - sy;
+      layer.canvas = newC; layer.ctx = nctx; layer.offset.x = 0; layer.offset.y = 0;
+      if(layer.type === 'text'){
+        layer.type = null; layer.text = null; layer.font = null; layer.color = null; layer.fontSize = null; layer.fontFamily = null; layer.bold = false;
+      }
     }
     width = sw; height = sh; try{ updateViewportAspect(); }catch(e){}
     try{ updateCanvasSizeDisplay(); }catch(e){}
@@ -2393,20 +2493,21 @@ function cancelCrop(){
 
 // Zoom and drag functionality
 function setupViewportControls() {
-  // Middle mouse button or space + left mouse for dragging
-  viewport.addEventListener('mousedown', (e) => {
-    if (e.button === 1 || (e.button === 0 && e.ctrlKey)) { // Middle button or Ctrl+Left
+  viewport.addEventListener('pointerdown', (e) => {
+    if (e.button === 1 || (e.button === 0 && spacePressed)) {
       const point = getViewPointFromClient(e.clientX, e.clientY);
       viewportTransform.isDragging = true;
+      viewportTransform.pointerId = e.pointerId;
       viewportTransform.startX = point.x;
       viewportTransform.startY = point.y;
       viewport.style.cursor = 'grabbing';
+      try{ viewport.setPointerCapture(e.pointerId); }catch(err){}
       e.preventDefault();
     }
   });
 
-  window.addEventListener('mousemove', (e) => {
-    if (viewportTransform.isDragging) {
+  viewport.addEventListener('pointermove', (e) => {
+    if (viewportTransform.isDragging && e.pointerId === viewportTransform.pointerId) {
       const point = getViewPointFromClient(e.clientX, e.clientY);
       viewportTransform.offsetX += point.x - viewportTransform.startX;
       viewportTransform.offsetY += point.y - viewportTransform.startY;
@@ -2416,12 +2517,15 @@ function setupViewportControls() {
     }
   });
 
-  window.addEventListener('mouseup', (e) => {
-    if (viewportTransform.isDragging) {
+  const finishPan = (e) => {
+    if (viewportTransform.isDragging && e.pointerId === viewportTransform.pointerId) {
       viewportTransform.isDragging = false;
+      viewportTransform.pointerId = null;
       updateCursorFeedback(e.clientX, e.clientY);
     }
-  });
+  };
+  viewport.addEventListener('pointerup', finishPan);
+  viewport.addEventListener('pointercancel', finishPan);
 
   // Mouse wheel for zooming
   viewport.addEventListener('wheel', (e) => {
@@ -2436,6 +2540,7 @@ function setupViewportControls() {
 window.addEventListener('keydown', (e)=>{
   const activeTag = document.activeElement?.tagName;
   const editingField = !!document.activeElement && (document.activeElement.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag));
+  if(e.code === 'Space' && !editingField){ spacePressed = true; e.preventDefault(); }
   if((e.ctrlKey || e.metaKey) && e.key === '0'){
     e.preventDefault();
     fitView(true);
@@ -2456,9 +2561,11 @@ window.addEventListener('keydown', (e)=>{
   else if(key === 'z'){ selectTool('zoom'); }
   else if(key === 'escape' && cropPending){ cancelCrop(); }
 });
+window.addEventListener('keyup', (e)=>{ if(e.code === 'Space') spacePressed = false; });
+window.addEventListener('blur', ()=>{ spacePressed = false; });
 
 // Init default - only create Background layer
-createLayer('Background', { historyLabel: 'Create Background' });
+createLayer('Background', { historyLabel: 'Create Background', role: 'background' });
 setupViewportControls();
 window.addEventListener('resize', () => { resizePreviewCanvas(); composite(); });
 resizePreviewCanvas();

@@ -134,7 +134,8 @@ input,select,textarea{accent-color:#737b84}
   repeating-conic-gradient(from 45deg, rgba(255,255,255,0.028) 0% 25%, rgba(0,0,0,0.022) 0% 50%) 50% 50%/28px 28px,
   linear-gradient(180deg,#171b20,#12161a);
 display:flex;align-items:stretch;justify-content:stretch;box-shadow:inset 0 1px 0 rgba(255,255,255,0.02), var(--shadow-1);overflow:hidden;position:relative}
-#view{display:block;background:transparent;border-radius:6px;width:100%;height:100%;box-shadow:0 12px 40px rgba(2,6,23,0.7)}
+#view{display:block;background:transparent;border-radius:6px;width:100%;height:100%;box-shadow:0 12px 40px rgba(2,6,23,0.7);touch-action:none}
+.cp-sv{touch-action:none}
 .actions button{margin-left:6px}
 .layer-name{flex:1;padding-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .layer-controls button{margin-left:0}
