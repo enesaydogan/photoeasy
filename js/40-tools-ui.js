@@ -65,7 +65,7 @@ function renderToolProps(){
         editMaskMode = e.target.checked;
       };
       const maskLabel = document.createElement('span'); maskLabel.textContent = t('props.editMask');
-      maskLabel.style.color = '#a9b6d8'; maskLabel.style.fontSize = '14px';
+      maskLabel.className = 'prop-note';
       maskToggle.appendChild(maskCheckbox); maskToggle.appendChild(maskLabel);
       maskBlk.appendChild(maskToggle);
       el.appendChild(maskBlk);
@@ -95,7 +95,7 @@ function renderToolProps(){
         editMaskMode = e.target.checked;
       };
       const maskLabel = document.createElement('span'); maskLabel.textContent = t('props.editMask');
-      maskLabel.style.color = '#a9b6d8'; maskLabel.style.fontSize = '14px';
+      maskLabel.className = 'prop-note';
       maskToggle.appendChild(maskCheckbox); maskToggle.appendChild(maskLabel);
       maskBlk.appendChild(maskToggle);
       el.appendChild(maskBlk);
@@ -103,14 +103,14 @@ function renderToolProps(){
 
     el.appendChild(sizeBlk); el.appendChild(opBlk);
   } else if(tool === 'transform'){
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.transformHelp'); el.appendChild(help);
+    const help = document.createElement('div'); help.className='prop-help'; help.textContent=t('props.transformHelp'); el.appendChild(help);
     if(transformState){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
       const ok = document.createElement('button'); ok.textContent = t('props.commitTransform'); ok.onclick = ()=>{ try{ commitTransform(); }catch(e){} };
       const cancel = document.createElement('button'); cancel.textContent = t('props.cancelTransform'); cancel.onclick = ()=>{ try{ cancelTransform(); }catch(e){} };
       row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
     } else {
-      const info = document.createElement('div'); info.style.color='#999'; info.style.fontSize='12px'; info.textContent=t('props.transformStart'); el.appendChild(info);
+      const info = document.createElement('div'); info.className='prop-help'; info.textContent=t('props.transformStart'); el.appendChild(info);
     }
   } else if(tool === 'text'){
     const colorBlk = createBlock(t('props.color'));
@@ -131,7 +131,7 @@ function renderToolProps(){
     const boldChk = document.createElement('input'); boldChk.type='checkbox'; boldChk.checked = fontBold; boldChk.onchange = (e)=>{ fontBold = e.target.checked; if(currentTextEditor){ currentTextEditor.pending.bold = fontBold; syncTextEditorAppearance(currentTextEditor); } }; boldBlk.appendChild(boldChk);
 
     el.appendChild(colorBlk); el.appendChild(sizeBlk); el.appendChild(familyBlk); el.appendChild(boldBlk);
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.textHelp'); el.appendChild(help);
+    const help = document.createElement('div'); help.className='prop-help'; help.textContent=t('props.textHelp'); el.appendChild(help);
     // if editing right now, show commit/cancel buttons
     if(currentTextEditor){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
@@ -140,13 +140,13 @@ function renderToolProps(){
       row.appendChild(commitBtn); row.appendChild(cancelBtn); el.appendChild(row);
     }
   } else if(tool === 'zoom'){
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.zoomHelp'); el.appendChild(help);
+    const help = document.createElement('div'); help.className='prop-help'; help.textContent=t('props.zoomHelp'); el.appendChild(help);
     const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
     const fitBtn = document.createElement('button'); fitBtn.textContent = t('props.fitView'); fitBtn.onclick = ()=> fitView(true);
     const actualBtn = document.createElement('button'); actualBtn.textContent = '100%'; actualBtn.onclick = ()=> setActualSize(true);
     row.appendChild(fitBtn); row.appendChild(actualBtn); el.appendChild(row);
   } else if(tool === 'crop'){
-    const help = document.createElement('div'); help.style.color='#999'; help.style.fontSize='12px'; help.textContent=t('props.cropHelp'); el.appendChild(help);
+    const help = document.createElement('div'); help.className='prop-help'; help.textContent=t('props.cropHelp'); el.appendChild(help);
     if(cropPending){
       const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px';
       const ok = document.createElement('button'); ok.textContent = t('props.commitCrop'); ok.onclick = ()=>{ try{ commitCrop(); }catch(e){} };
@@ -154,7 +154,7 @@ function renderToolProps(){
       row.appendChild(ok); row.appendChild(cancel); el.appendChild(row);
     }
   } else {
-    const info = document.createElement('div'); info.style.color='#ddd'; info.style.fontSize='13px'; info.textContent=t('props.toolOptions'); el.appendChild(info);
+    const info = document.createElement('div'); info.className='prop-note'; info.textContent=t('props.toolOptions'); el.appendChild(info);
   }
   if(tool === 'fill'){
     // add color picker and option to calculate mask on composite (but always apply to active layer)

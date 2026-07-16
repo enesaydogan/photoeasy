@@ -92,7 +92,9 @@ function syncTextEditorAppearance(editor){
   editor.shell.style.minWidth = editorWidth + 'px';
   editor.shell.style.minHeight = editorHeight + 'px';
   editor.shell.style.borderRadius = Math.max(12, Math.round(14 * uiScale)) + 'px';
-  editor.shell.style.boxShadow = '0 0 0 ' + Math.max(1, Math.round(uiScale)) + 'px rgba(255,255,255,0.14), 0 18px 42px rgba(0,0,0,0.38)';
+  // The ring scales with zoom, so it stays inline; the colors come from the
+  // theme tokens so it tracks light/dark without a repaint hook.
+  editor.shell.style.boxShadow = '0 0 0 ' + Math.max(1, Math.round(uiScale)) + 'px var(--line), var(--shadow)';
 
   editor.ta.style.font = getTextFontString(editor.pending, uiScale);
   editor.ta.style.color = editor.pending.color;

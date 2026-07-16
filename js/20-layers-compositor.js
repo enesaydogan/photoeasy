@@ -1,4 +1,12 @@
 // Layer lifecycle, layer UI, and canvas compositing.
+
+// Handles and marching ants are painted onto the user's artwork, so they are
+// deliberately theme-independent: the theme says nothing about the photo
+// underneath. Pairing a light fill with a dark stroke keeps them legible on
+// any image. Chrome that sits on the themed backdrop uses themeInk() instead.
+const OVERLAY_FILL = 'rgba(255,255,255,0.95)';
+const OVERLAY_STROKE = 'rgba(0,0,0,0.7)';
+
 function createLayer(name=t('layer.number', { n: layers.length + 1 }), options = {}){
   const { historyLabel = 'history.createLayer', skipHistory = false, role = null, autoName = null } = options;
   // ensure new layer canvas matches the largest existing layer or the current view
@@ -431,25 +439,44 @@ function composite(){
         y: Math.round(display.originY + (cy + ry) * display.totalScale)
       };
     });
-    viewCtx.strokeStyle = 'rgba(236,239,242,0.82)'; viewCtx.lineWidth = 1.5; viewCtx.beginPath();
-    viewCtx.moveTo(corners[0].x, corners[0].y);
-    for(let i=1;i<corners.length;i++) viewCtx.lineTo(corners[i].x, corners[i].y);
-    viewCtx.closePath(); viewCtx.stroke();
+    viewCtx.save();
+    const boxPath = ()=>{
+      viewCtx.beginPath();
+      viewCtx.moveTo(corners[0].x, corners[0].y);
+      for(let i=1;i<corners.length;i++) viewCtx.lineTo(corners[i].x, corners[i].y);
+      viewCtx.closePath();
+    };
+    // Dark base under a light dash: legible on any artwork, which the theme
+    // says nothing about.
+    viewCtx.lineWidth = 1.5;
+    viewCtx.strokeStyle = OVERLAY_STROKE; viewCtx.setLineDash([]); boxPath(); viewCtx.stroke();
+    viewCtx.strokeStyle = OVERLAY_FILL; viewCtx.setLineDash([5, 4]); boxPath(); viewCtx.stroke();
+    viewCtx.setLineDash([]);
     // draw handles
-    for(const c of corners){ viewCtx.fillStyle='rgba(226,232,238,0.95)'; viewCtx.fillRect(c.x-6,c.y-6,12,12); }
+    viewCtx.lineWidth = 1;
+    for(const c of corners){
+      viewCtx.fillStyle = OVERLAY_FILL; viewCtx.strokeStyle = OVERLAY_STROKE;
+      viewCtx.fillRect(c.x-6, c.y-6, 12, 12);
+      viewCtx.strokeRect(c.x-5.5, c.y-5.5, 11, 11);
+    }
     // rotate handle: top center offset
     const topCenter = {x: (corners[0].x + corners[1].x)/2, y: (corners[0].y + corners[1].y)/2};
     const handleScale = Math.max(getDisplayTransform().totalScale, 0.001);
     const handleRadius = 14 / handleScale;
     const rotHandle = {x: topCenter.x, y: topCenter.y - (30 / handleScale)};
-    viewCtx.beginPath(); viewCtx.strokeStyle='rgba(210,216,223,0.86)'; viewCtx.moveTo(topCenter.x, topCenter.y); viewCtx.lineTo(rotHandle.x, rotHandle.y); viewCtx.stroke();
-    viewCtx.fillStyle='rgba(196,204,212,0.95)'; viewCtx.beginPath(); viewCtx.arc(rotHandle.x, rotHandle.y, 6, 0, Math.PI*2); viewCtx.fill();
+    viewCtx.lineWidth = 3; viewCtx.strokeStyle = OVERLAY_STROKE;
+    viewCtx.beginPath(); viewCtx.moveTo(topCenter.x, topCenter.y); viewCtx.lineTo(rotHandle.x, rotHandle.y); viewCtx.stroke();
+    viewCtx.lineWidth = 1; viewCtx.strokeStyle = OVERLAY_FILL;
+    viewCtx.beginPath(); viewCtx.moveTo(topCenter.x, topCenter.y); viewCtx.lineTo(rotHandle.x, rotHandle.y); viewCtx.stroke();
+    viewCtx.fillStyle = OVERLAY_FILL; viewCtx.strokeStyle = OVERLAY_STROKE;
+    viewCtx.beginPath(); viewCtx.arc(rotHandle.x, rotHandle.y, 6, 0, Math.PI*2); viewCtx.fill(); viewCtx.stroke();
+    viewCtx.restore();
   }
   const display = getDisplayTransform();
   viewCtx.save();
-  viewCtx.strokeStyle = 'rgba(255,255,255,0.18)';
+  viewCtx.strokeStyle = themeInk('canvasEdge');
   viewCtx.lineWidth = 1;
-  viewCtx.shadowColor = 'rgba(0,0,0,0.4)';
+  viewCtx.shadowColor = themeInk('canvasHalo');
   viewCtx.shadowBlur = 22;
   viewCtx.strokeRect(
     Math.round(display.originX) + 0.5,
@@ -467,15 +494,21 @@ function composite(){
     viewCtx.save();
     viewCtx.translate(display.originX, display.originY);
     viewCtx.scale(display.totalScale, display.totalScale);
-    viewCtx.strokeStyle = 'rgba(255,255,255,0.86)';
-    viewCtx.setLineDash([6 / display.totalScale, 4 / display.totalScale]);
+    // Same two-tone treatment as the transform box: the text sits on artwork.
     viewCtx.lineWidth = 1 / display.totalScale;
+    viewCtx.strokeStyle = OVERLAY_STROKE;
+    viewCtx.setLineDash([]);
+    viewCtx.strokeRect(boxX, boxY, boxW, boxH);
+    viewCtx.strokeStyle = OVERLAY_FILL;
+    viewCtx.setLineDash([6 / display.totalScale, 4 / display.totalScale]);
     viewCtx.strokeRect(boxX, boxY, boxW, boxH);
     viewCtx.setLineDash([]);
     [[boxX, boxY],[boxX + boxW, boxY],[boxX + boxW, boxY + boxH],[boxX, boxY + boxH]].forEach(([handleX, handleY])=>{
       const hs = 6 / display.totalScale;
-      viewCtx.fillStyle = 'rgba(236,239,242,0.96)';
+      viewCtx.fillStyle = OVERLAY_FILL;
+      viewCtx.strokeStyle = OVERLAY_STROKE;
       viewCtx.fillRect(handleX - hs / 2, handleY - hs / 2, hs, hs);
+      viewCtx.strokeRect(handleX - hs / 2, handleY - hs / 2, hs, hs);
     });
     viewCtx.restore();
   }

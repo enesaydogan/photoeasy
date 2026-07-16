@@ -88,6 +88,8 @@ window.addEventListener('langchange', ()=>{
 createLayer(t('layer.background'), { historyLabel: 'history.createBackground', role: 'background', autoName: { key:'layer.background' } });
 setupViewportControls();
 window.addEventListener('resize', () => { resizePreviewCanvas(); composite(); });
+// Overlays are canvas-painted, so a theme swap needs an explicit repaint.
+document.addEventListener('themechange', () => composite());
 resizePreviewCanvas();
 composite();
 renderToolProps();
