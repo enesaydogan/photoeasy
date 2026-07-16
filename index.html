@@ -3,12 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>PhotoEasy — Browser Photoshop Clone (Demo)</title>
+  <title>PhotoEasy — Browser Photo Editor</title>
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="toolbar">
+    <div class="editor-brand" aria-label="PhotoEasy editor">
+      <span class="editor-brand-name">PhotoEasy</span>
+      <span class="editor-brand-context">— editor</span>
+    </div>
+    <div class="toolbar-rule" aria-hidden="true"></div>
     <div class="actions">
       <button id="undo">Undo</button>
       <button id="redo">Redo</button>
